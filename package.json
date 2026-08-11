@@ -1,0 +1,48 @@
+{
+  "name": "cinlan-studio",
+  "version": "0.2.5",
+  "private": true,
+  "description": "Cinlan Studio (星澜绘坊) AI image and video creation workspace.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && node scripts/prepare-standalone.mjs",
+    "start": "next start",
+    "db:migrate": "tsx scripts/db-migrate.ts",
+    "worker:creative": "tsx scripts/creative-worker.ts",
+    "test:postgres": "tsx scripts/creative-postgres-test.ts",
+    "test:assets": "tsx scripts/asset-thumbnail-test.ts",
+    "test:markdown": "tsx scripts/markdown-render-test.tsx",
+    "test:transparency": "tsx scripts/image-transparency-test.ts",
+    "test:background-removal": "tsx scripts/background-removal-test.ts",
+    "test:standalone": "node scripts/standalone-smoke.mjs",
+    "lint": "next lint",
+    "test:smoke": "node scripts/studio-smoke.mjs"
+  },
+  "dependencies": {
+    "@alicloud/imageseg20191230": "^4.0.1",
+    "next": "15.5.21",
+    "pg": "^8.23.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "sharp": "0.35.3"
+  },
+  "overrides": {
+    "nanoid": "3.3.17",
+    "postcss": "$postcss",
+    "sharp": "$sharp"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.21.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.0",
+    "postcss": "8.5.23",
+    "tailwindcss": "^3.4.0",
+    "tsx": "^4.23.11",
+    "typescript": "^5.0.0"
+  }
+}

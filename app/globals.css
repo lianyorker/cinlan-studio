@@ -1,0 +1,187 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    font-feature-settings: "ss01", "cv01";
+    background: #ffffff;
+  }
+  .dark body { background: #0a0a0a; }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(120, 120, 120, 0.25);
+    border-radius: 99px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* Sidebar nav item */
+  .nav-item {
+    @apply relative flex w-full items-center gap-3 rounded-full px-3.5 py-2.5 text-sm font-medium text-neutral-600 transition-colors dark:text-neutral-400;
+  }
+  .nav-item:hover {
+    @apply bg-white/75 text-neutral-900 dark:bg-white/[0.05] dark:text-white;
+  }
+  .nav-item[data-active="true"] {
+    @apply bg-white text-neutral-900 shadow-[0_1px_2px_rgba(0,0,0,0.06)] dark:bg-white dark:text-neutral-900;
+  }
+
+  /* Aspect-ratio pill */
+  .ratio {
+    @apply flex h-9 items-center justify-center gap-1.5 rounded-full border border-neutral-200 bg-white text-[13px] font-medium text-neutral-600 transition-colors dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-400;
+  }
+  .ratio[data-active="true"] {
+    @apply border-neutral-900 bg-neutral-50 text-neutral-900 dark:border-white dark:bg-white/[0.04] dark:text-white;
+  }
+
+  .select {
+    @apply flex items-center justify-between rounded-full border border-neutral-200 bg-white px-3.5 py-2.5 text-sm cursor-pointer dark:border-neutral-800 dark:bg-neutral-900;
+  }
+
+  .icon-btn {
+    @apply grid h-8 w-8 place-items-center rounded-full text-neutral-500 transition-colors;
+  }
+  .icon-btn:hover {
+    @apply bg-black/[0.05] dark:bg-white/[0.06] text-neutral-900 dark:text-white;
+  }
+
+  .primary-btn {
+    @apply flex items-center justify-center gap-2 rounded-full bg-neutral-900 text-sm font-semibold text-white transition hover:bg-neutral-800 active:scale-[0.99] dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-100;
+  }
+
+  .composer-shell {
+    @apply rounded-[26px] border border-neutral-200/90 bg-white shadow-[0_10px_30px_rgba(0,0,0,0.06)] dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/40;
+  }
+
+  .composer-dock::before {
+    content: "";
+    position: absolute;
+    inset: -48px 0 auto;
+    height: 48px;
+    pointer-events: none;
+    background: linear-gradient(to top, #ffffff 0%, rgba(255,255,255,0) 100%);
+  }
+
+  .dark .composer-dock::before {
+    background: linear-gradient(to top, #0a0a0a 0%, rgba(10,10,10,0) 100%);
+  }
+
+  .history-gallery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .history-gallery::after {
+    content: "";
+    flex-grow: 99999;
+    min-width: 0;
+  }
+
+  .history-gallery-item {
+    flex-basis: var(--history-basis-mobile);
+    flex-grow: var(--history-ratio);
+    min-width: 0;
+  }
+
+  @media (min-width: 640px) {
+    .history-gallery-item { flex-basis: var(--history-basis-tablet); }
+  }
+
+  @media (min-width: 1280px) {
+    .history-gallery-item { flex-basis: var(--history-basis-desktop); }
+  }
+
+  .composer-control {
+    @apply flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-transparent bg-transparent px-3 text-xs font-medium text-neutral-600 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300 dark:border-transparent dark:bg-transparent dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white dark:focus-visible:ring-neutral-700;
+  }
+
+  .composer-control[data-state="open"] {
+    @apply bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-white;
+  }
+
+  .composer-select {
+    @apply h-8 shrink-0 appearance-none rounded-full border border-transparent bg-transparent py-1 pl-3 pr-8 text-xs font-medium text-neutral-600 outline-none transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus:ring-2 focus:ring-neutral-300 dark:border-transparent dark:bg-transparent dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white;
+  }
+}
+
+@layer utilities {
+  .grain {
+    position: relative;
+  }
+  .grain::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .fade-up {
+    animation: fadeUp 0.5s both;
+  }
+  @keyframes fadeUp {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .anim-prog {
+    animation: prog 2.6s ease-in-out infinite;
+  }
+  @keyframes prog {
+    0% { width: 8%; }
+    50% { width: 78%; }
+    100% { width: 94%; }
+  }
+  .creative-pending-card {
+    position: relative;
+    isolation: isolate;
+  }
+  .creative-pending-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,0.8) 48%, transparent 76%);
+    transform: translateX(-100%);
+    animation: creativeSweep 2.2s ease-in-out infinite;
+  }
+  .creative-pending-card > * {
+    position: relative;
+    z-index: 1;
+  }
+  .dark .creative-pending-card::before {
+    background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,0.06) 48%, transparent 76%);
+  }
+  .creative-pending-line > span {
+    animation: creativeProgress 2.6s ease-in-out infinite;
+  }
+  @keyframes creativeSweep {
+    0%, 15% { transform: translateX(-100%); }
+    75%, 100% { transform: translateX(100%); }
+  }
+  @keyframes creativeProgress {
+    0% { transform: translateX(-70%); }
+    55% { transform: translateX(65%); }
+    100% { transform: translateX(180%); }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}

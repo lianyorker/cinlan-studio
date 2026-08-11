@@ -1,0 +1,17 @@
+[Unit]
+Description=Cinlan Studio creative worker
+After=network-online.target postgresql.service cinlan-studio.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cinlan
+Group=cinlan
+WorkingDirectory=/opt/cinlan-studio
+EnvironmentFile=/etc/cinlan-studio.env
+ExecStart=/usr/bin/node node_modules/tsx/dist/cli.mjs scripts/creative-worker.ts
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
