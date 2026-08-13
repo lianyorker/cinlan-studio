@@ -40,6 +40,7 @@ type CloudTask = {
   expectedCount?: number
   slotIndex?: number
   aspectRatio?: number
+  error?: string
 }
 
 interface FormField {
@@ -233,6 +234,7 @@ export function GenerationSurface({
     if (!creativeCore.enabled || !connected || local || isVideo) return
     let alive = true
     const resumedPollers: ReturnType<typeof setInterval>[] = []
+    let resumeTimer: ReturnType<typeof setTimeout> | undefined
     void api.creativeJobs(false, 1, 24).then(({ jobs }) => {
       if (!alive) return
       const matching = jobs.filter((job) => job.model === model.slug)
@@ -246,6 +248,7 @@ export function GenerationSurface({
       if (!active.length) return
       const tasks: CloudTask[] = []
       const restoredSlots: Slot[] = []
+      const jobsToPoll: Array<{ id: string; expectedCount: number; slotIndex: number; aspectRatio?: number }> = []
       let slotIndex = 0
       for (const job of active) {
         const jobStatus = compatibleJobStatus(job.status)
@@ -258,14 +261,21 @@ export function GenerationSurface({
             ? { status: 'done', url: resultUrls[index], aspectRatio }
             : { status: 'pending', aspectRatio })
         }
-        resumedPollers.push(pollCreative(job.id, expectedCount, slotIndex, aspectRatio))
+        jobsToPoll.push({ id: job.id, expectedCount, slotIndex, aspectRatio })
         slotIndex += expectedCount
       }
       setCurrentCloudTasks(tasks)
       setSlots(restoredSlots)
+      resumeTimer = setTimeout(() => {
+        if (!alive) return
+        for (const job of jobsToPoll) {
+          resumedPollers.push(pollCreative(job.id, job.expectedCount, job.slotIndex, job.aspectRatio, tasks.find((task) => task.id === job.id)?.prompt))
+        }
+      }, 0)
     }).catch(() => {})
     return () => {
       alive = false
+      if (resumeTimer) clearTimeout(resumeTimer)
       resumedPollers.forEach(clearInterval)
     }
   }, [connected, creativeCore.enabled, isVideo, local, maxOutputs, model.name, model.slug])
@@ -385,12 +395,11 @@ export function GenerationSurface({
           : task))
         if ((status === 'COMPLETED' || status === 'PARTIAL_SUCCESS') && resultUrl) {
           setSlot(index, { status: 'done', url: resultUrl, aspectRatio })
-          setCurrentCloudTasks((current) => current.filter((task) => task.id !== res.id && task.id !== temporaryTaskId))
           setRefreshToken((current) => current + 1)
           void refreshMe()
           return
         }
-        pollCreative(res.id, 1, index, aspectRatio)
+        pollCreative(res.id, 1, index, aspectRatio, promptOverride)
         return
       }
       if (status === 'COMPLETED' && resultUrl) {
@@ -417,7 +426,7 @@ export function GenerationSurface({
     })
   }
 
-  function pollCreative(id: string, expectedCount: number, slotStart = 0, aspectRatio?: number) {
+  function pollCreative(id: string, expectedCount: number, slotStart = 0, aspectRatio?: number, taskPrompt = '') {
     let polls = 0
     let failures = 0
     let running = false
@@ -437,9 +446,17 @@ export function GenerationSurface({
         failures = 0
         const urls = task.result_urls?.length ? task.result_urls : task.result_url ? [task.result_url] : []
         if (activityJobIdRef.current === id) setActivityStatus(task.status)
-        setCurrentCloudTasks((current) => current.map((item) => item.id === id
-          ? { ...item, status: task.status, resultUrls: urls, expectedCount }
-          : item))
+        setCurrentCloudTasks((current) => {
+          const existing = current.find((item) => item.id === id)
+          const updated: CloudTask = {
+            ...(existing ?? { id, model: model.name, prompt: taskPrompt, type: isVideo ? 'video' : 'image', slotIndex: slotStart, aspectRatio }),
+            status: task.status,
+            resultUrls: urls,
+            expectedCount,
+            error: task.error || undefined,
+          }
+          return existing ? current.map((item) => item.id === id ? updated : item) : [...current, updated]
+        })
         const visibleCount = Math.max(expectedCount, urls.length)
         updateSlotRange(slotStart, visibleCount, (index) => urls[index]
           ? { status: 'done', url: urls[index], aspectRatio }
@@ -449,7 +466,6 @@ export function GenerationSurface({
           updateSlotRange(slotStart, visibleCount, (index) => urls[index]
             ? { status: 'done', url: urls[index], aspectRatio }
             : { status: 'error', error: t.creative.partial, aspectRatio })
-          setCurrentCloudTasks((current) => current.filter((item) => item.id !== id))
           setRefreshToken((current) => current + 1)
           void refreshMe()
           return
@@ -461,7 +477,6 @@ export function GenerationSurface({
             ? t.ws.noCompatibleAccounts
             : rawMessage
           updateSlotRange(slotStart, expectedCount, () => ({ status: 'error', error: message, aspectRatio }))
-          setCurrentCloudTasks((current) => current.filter((item) => item.id !== id))
           setRefreshToken((current) => current + 1)
           void refreshMe()
         }
@@ -498,7 +513,7 @@ export function GenerationSurface({
       setSlots(Array.from({ length: expectedCount }, () => ({ status: 'pending', aspectRatio })))
       setCurrentCloudTasks([{ id: result.id, status, model: model.name, prompt: result.prompt, type: 'image', resultUrls: result.result_urls, expectedCount, slotIndex: 0, aspectRatio }])
       setRefreshToken((current) => current + 1)
-      pollCreative(result.id, expectedCount, 0, aspectRatio)
+      pollCreative(result.id, expectedCount, 0, aspectRatio, result.prompt)
     } catch (retryError) {
       const rawMessage = retryError instanceof ApiError ? retryError.message : t.ws.failed
       const message = retryError instanceof ApiError && retryError.status === 401
@@ -746,6 +761,7 @@ export function GenerationSurface({
           refreshToken={refreshToken}
           onRetry={creativeCore.enabled && !isVideo && !local && !busy ? retryCreative : undefined}
           onCancel={creativeCore.enabled && !isVideo && !local ? cancelCreativeTask : undefined}
+          onRemoved={(jobId) => setCurrentCloudTasks((current) => current.filter((task) => task.id !== jobId))}
           onContinueEdit={model.capabilities?.image_edit ? ({ jobId, resultUrl }) => {
             setImageUrls([resultUrl])
             setParentJobId(jobId)

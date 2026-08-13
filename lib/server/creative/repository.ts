@@ -391,11 +391,12 @@ export async function listCreativeJobs(ownerId: string, input: { type?: 'image';
   const activeStatuses = ['CREATED','ANALYZING','READY','QUEUED','RUNNING','VALIDATING','CANCEL_REQUESTED']
   const values: unknown[] = [ownerId, pageSize, (page - 1) * pageSize]
   const activeClause = input.active ? `AND j.status = ANY($4::text[])` : ''
+  const activeCountClause = input.active ? `AND j.status = ANY($2::text[])` : ''
   if (input.active) values.push(activeStatuses)
-  const result = await creativeQuery<JobRecord & { result_url: string | null; total_count: string }>(
-    `SELECT j.*,
-            '/api/v1/creative/assets/' || output.asset_id AS result_url,
-            count(*) OVER()::text AS total_count
+  const [result, totalResult, workCountResult] = await Promise.all([
+    creativeQuery<JobRecord & { result_url: string | null }>(
+      `SELECT j.*,
+            '/api/v1/creative/assets/' || output.asset_id AS result_url
        FROM creative_jobs j
        LEFT JOIN LATERAL (
          SELECT asset_id FROM creative_job_assets WHERE job_id = j.id AND role = 'output' ORDER BY ordinal LIMIT 1
@@ -404,9 +405,36 @@ export async function listCreativeJobs(ownerId: string, input: { type?: 'image';
         AND j.deleted_at IS NULL
         ${activeClause}
       ORDER BY j.created_at DESC LIMIT $2 OFFSET $3`,
-    values
-  )
-  return { rows: result.rows, total: Number(result.rows[0]?.total_count ?? 0), page, pageSize }
+      values
+    ),
+    creativeQuery<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM creative_jobs j
+        WHERE j.owner_id = $1
+          AND j.deleted_at IS NULL
+          ${activeCountClause}`,
+      input.active ? [ownerId, activeStatuses] : [ownerId]
+    ),
+    creativeQuery<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM creative_job_assets ja
+         JOIN creative_jobs j ON j.id = ja.job_id
+         JOIN creative_assets a ON a.id = ja.asset_id
+        WHERE j.owner_id = $1
+          AND j.deleted_at IS NULL
+          AND j.status IN ('COMPLETED','PARTIAL_SUCCESS')
+          AND ja.role = 'output'
+          AND a.deleted_at IS NULL`,
+      [ownerId]
+    ),
+  ])
+  return {
+    rows: result.rows,
+    total: Number(totalResult.rows[0]?.count ?? 0),
+    workCount: Number(workCountResult.rows[0]?.count ?? 0),
+    page,
+    pageSize,
+  }
 }
 
 export async function softDeleteCreativeJob(ownerId: string, jobId: string) {

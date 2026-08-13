@@ -87,6 +87,7 @@ export interface Paginated {
   page: number
   pageSize: number
   totalCount: number
+  workCount?: number
   totalPages: number
   hasMore: boolean
 }

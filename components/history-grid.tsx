@@ -73,15 +73,17 @@ export function HistoryGrid({
   onContinueEdit,
   onRetry,
   onCancel,
+  onRemoved,
 }: {
   modelType: 'image' | 'video' | 'all'
-  currentCloudTasks?: Array<{ id: string; status: string; model: string; prompt?: string; type?: 'image' | 'video'; resultUrls?: string[]; expectedCount?: number; aspectRatio?: number }>
+  currentCloudTasks?: Array<{ id: string; status: string; model: string; prompt?: string; type?: 'image' | 'video'; resultUrls?: string[]; expectedCount?: number; aspectRatio?: number; error?: string }>
   localInProgress?: { seed: number; prompt: string; aspectRatio?: number }
   refreshToken: number
   empty?: ReactNode
   onContinueEdit?: (item: { jobId: string; resultUrl: string }) => void
   onRetry?: (jobId: string) => Promise<void>
   onCancel?: (jobId: string) => Promise<void>
+  onRemoved?: (jobId: string) => void
 }) {
   const { t } = useI18n()
   const { connected } = useStudio()
@@ -93,6 +95,8 @@ export function HistoryGrid({
   const [copied, setCopied] = useState(false)
   const [retryingId, setRetryingId] = useState('')
   const [cancellingId, setCancellingId] = useState('')
+  const [removingId, setRemovingId] = useState('')
+  const [serverWorkCount, setServerWorkCount] = useState<number | null>(null)
   const [measuredRatios, setMeasuredRatios] = useState<Record<string, number>>({})
   const loadedOnce = useRef(false)
   const loadSequence = useRef(0)
@@ -119,7 +123,10 @@ export function HistoryGrid({
         }
       }
       next.sort((a, b) => b.createdAt - a.createdAt)
-      if (sequence === loadSequence.current) setItems(next)
+      if (sequence === loadSequence.current) {
+        setItems(next)
+        setServerWorkCount(Number.isFinite(cloud.pagination.workCount) ? cloud.pagination.workCount : null)
+      }
     } finally {
       if (sequence === loadSequence.current) {
         loadedOnce.current = true
@@ -134,7 +141,7 @@ export function HistoryGrid({
     const merged = new Map(items.map((item) => [historyKey(item), item]))
     const now = Date.now()
     for (const task of currentCloudTasks ?? []) {
-      if (!['PENDING', 'IN_QUEUE', 'IN_PROGRESS', 'CANCEL_REQUESTED'].includes(task.status)) continue
+      if (task.id === removingId) continue
       const mediaType = task.type ?? (modelType === 'video' ? 'video' : 'image')
       if (modelType !== 'all' && mediaType !== modelType) continue
       const expectedCount = Math.max(1, task.expectedCount ?? task.resultUrls?.length ?? 1)
@@ -155,6 +162,7 @@ export function HistoryGrid({
           createdAt: stored?.createdAt ?? now,
           serverBacked: stored?.serverBacked || task.id.startsWith('job_'),
           aspectRatio: task.aspectRatio ?? stored?.aspectRatio,
+          error: task.error || stored?.error,
         })
       }
     }
@@ -183,7 +191,7 @@ export function HistoryGrid({
       if (!newerAttempts.has(signature)) newerAttempts.set(signature, attemptId)
       return true
     })
-  }, [currentCloudTasks, items, localInProgress, modelType, t.local.badge])
+  }, [currentCloudTasks, items, localInProgress, modelType, removingId, t.local.badge])
   const retry = async (item: HistoryItem) => {
     if (!onRetry || !item.serverBacked || retryingId) return
     const jobId = item.jobId || item.id
@@ -211,12 +219,22 @@ export function HistoryGrid({
   }
   const removeOne = async (item: HistoryItem) => {
     const targetId = item.serverBacked ? item.jobId || item.id : item.id
-    if (item.type === 'local') await deleteLocalGeneration(item.id)
-    else {
-      if (item.serverBacked) await api.deleteCreativeJob(targetId)
-      await deleteStudioHistory(targetId)
+    if (removingId) return
+    setRemovingId(targetId)
+    setItems((current) => current.filter((entry) => (entry.serverBacked ? entry.jobId || entry.id : entry.id) !== targetId))
+    try {
+      if (item.type === 'local') await deleteLocalGeneration(item.id)
+      else {
+        if (item.serverBacked) await api.deleteCreativeJob(targetId)
+        await deleteStudioHistory(targetId)
+      }
+      if (item.serverBacked) onRemoved?.(targetId)
+      await loadHistory()
+    } catch {
+      await loadHistory()
+    } finally {
+      setRemovingId('')
     }
-    await loadHistory()
   }
   const toggle = (key: string) => setSelected((prev) => prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key])
   const removeSelected = async () => {
@@ -233,12 +251,17 @@ export function HistoryGrid({
       if (item.serverBacked) await api.deleteCreativeJob(targetId)
       await deleteStudioHistory(targetId)
     }))
+    for (const item of targets.values()) {
+      if (item.serverBacked) onRemoved?.(item.jobId || item.id)
+    }
     setSelected([])
     await loadHistory()
   }
 
   const taskItems = visible.filter(isTaskItem)
   const workItems = visible.filter((item) => !isTaskItem(item))
+  const localWorkCount = workItems.filter((item) => !item.serverBacked).length
+  const displayedWorkCount = (serverWorkCount ?? workItems.filter((item) => item.serverBacked).length) + localWorkCount
   const rememberRatio = (item: HistoryItem, width: number, height: number) => {
     if (!width || !height) return
     const ratio = Math.max(0.25, Math.min(4, width / height))
@@ -246,14 +269,14 @@ export function HistoryGrid({
     setMeasuredRatios((current) => Math.abs((current[key] ?? 0) - ratio) < 0.001 ? current : { ...current, [key]: ratio })
   }
 
-  if (loading) {
+  if (loading && !visible.length) {
     return <section data-testid="history-skeleton" className="mx-auto w-full max-w-[1440px] py-12"><div className="mb-5 h-5 w-24 animate-pulse rounded bg-neutral-200 dark:bg-neutral-800" /><div className="flex h-48 gap-3 sm:h-56">{[1.2, 1.7, 0.75, 1.1].map((ratio, index) => <div key={index} style={{ flex: ratio }} className="animate-pulse rounded-lg bg-neutral-100 dark:bg-neutral-900" />)}</div></section>
   }
 
   return (
     <section className="mx-auto w-full max-w-[1440px] py-8">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <div><h2 className="text-lg font-semibold">{t.ws.works}</h2><p className="mt-1 text-xs text-neutral-400">{workItems.length ? (t.ws.workCount.includes('{count}') ? t.ws.workCount.replace('{count}', String(workItems.length)) : `${workItems.length} ${t.ws.workCount}`) : t.ws.worksEmpty}</p></div>
+        <div><h2 className="text-lg font-semibold">{t.ws.works}</h2><p data-testid="history-work-count" className="mt-1 text-xs text-neutral-400">{displayedWorkCount ? (t.ws.workCount.includes('{count}') ? t.ws.workCount.replace('{count}', String(displayedWorkCount)) : `${displayedWorkCount} ${t.ws.workCount}`) : t.ws.worksEmpty}</p></div>
         {workItems.length > 0 && <div className="flex items-center gap-2">
           {manage && selected.length > 0 && <button type="button" onClick={() => void removeSelected()} className="rounded-full px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/30">{t.ws.deleteSelected.replace('{count}', String(selected.length))} {!t.ws.deleteSelected.includes('{count}') && `(${selected.length})`}</button>}
           <button type="button" onClick={() => { setManage((v) => !v); setSelected([]) }} className="rounded-full px-3 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white">{manage ? t.ws.doneManaging : t.ws.manage}</button>
@@ -261,7 +284,7 @@ export function HistoryGrid({
       </div>
       {!visible.length ? (empty ?? <div className="rounded-lg border border-dashed border-neutral-200 py-16 text-center text-sm text-neutral-400 dark:border-neutral-800">{t.history.empty}</div>) : <>
         {taskItems.length > 0 && <div data-testid="history-task-list" className="mb-5 grid gap-2 md:grid-cols-2">
-          {taskItems.map((item) => <HistoryTask key={historyKey(item)} item={item} retrying={retryingId === (item.jobId || item.id)} cancelling={cancellingId === (item.jobId || item.id)} onRetry={onRetry && item.serverBacked ? () => void retry(item) : undefined} onCancel={onCancel && item.serverBacked && isPending(item.status) ? () => void cancel(item) : undefined} onRemove={!isPending(item.status) ? () => void removeOne(item) : undefined} t={t} />)}
+          {taskItems.map((item) => <HistoryTask key={historyKey(item)} item={item} retrying={retryingId === (item.jobId || item.id)} cancelling={cancellingId === (item.jobId || item.id)} removing={removingId === (item.jobId || item.id)} onRetry={onRetry && item.serverBacked ? () => void retry(item) : undefined} onCancel={onCancel && item.serverBacked && isPending(item.status) ? () => void cancel(item) : undefined} onRemove={!isPending(item.status) ? () => void removeOne(item) : undefined} t={t} />)}
         </div>}
         {workItems.length > 0 && <div data-testid="history-gallery" className="history-gallery">
           {workItems.map((item) => {
@@ -275,7 +298,7 @@ export function HistoryGrid({
   )
 }
 
-function HistoryTask({ item, retrying, cancelling, onRetry, onCancel, onRemove, t }: { item: HistoryItem; retrying: boolean; cancelling: boolean; onRetry?: () => void; onCancel?: () => void; onRemove?: () => void; t: Dict }) {
+function HistoryTask({ item, retrying, cancelling, removing, onRetry, onCancel, onRemove, t }: { item: HistoryItem; retrying: boolean; cancelling: boolean; removing: boolean; onRetry?: () => void; onCancel?: () => void; onRemove?: () => void; t: Dict }) {
   const pending = isPending(item.status)
   return <div data-history-key={historyKey(item)} data-task-aspect-ratio={item.aspectRatio || undefined} className={`relative flex min-h-16 min-w-0 items-center gap-3 overflow-hidden rounded-lg bg-neutral-50 px-3 py-2.5 dark:bg-neutral-900 ${pending ? 'creative-pending-card' : ''}`}>
     <span className={`h-2 w-2 shrink-0 rounded-full ${pending ? 'animate-pulse bg-neutral-500' : 'bg-red-500'}`} />
@@ -289,7 +312,7 @@ function HistoryTask({ item, retrying, cancelling, onRetry, onCancel, onRemove, 
     <div className="flex shrink-0 items-center gap-1">
       {!pending && onRetry && <button type="button" onClick={onRetry} disabled={retrying} className="inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-200 hover:text-neutral-900 disabled:opacity-50 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white"><IconRetry className={`h-3.5 w-3.5 ${retrying ? 'animate-spin' : ''}`} />{retrying ? t.history.retrying : t.history.retry}</button>}
       {pending && onCancel && <button type="button" data-testid="cancel-creative-job" onClick={onCancel} disabled={cancelling || item.status === 'CANCEL_REQUESTED'} title={cancelling ? t.creative.cancelling : t.creative.cancel} aria-label={cancelling ? t.creative.cancelling : t.creative.cancel} className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-900 disabled:opacity-50 dark:hover:bg-neutral-800 dark:hover:text-white"><IconX className="h-3.5 w-3.5" /></button>}
-      {!pending && onRemove && <button type="button" onClick={onRemove} title={t.history.delete} aria-label={t.history.delete} className="grid h-8 w-8 place-items-center rounded-full text-neutral-400 transition hover:bg-neutral-200 hover:text-red-600 dark:hover:bg-neutral-800 dark:hover:text-red-300"><IconX className="h-3.5 w-3.5" /></button>}
+      {!pending && onRemove && <button type="button" data-testid="delete-creative-job" onClick={onRemove} disabled={removing} title={t.history.delete} aria-label={t.history.delete} className="grid h-8 w-8 place-items-center rounded-full text-neutral-400 transition hover:bg-neutral-200 hover:text-red-600 disabled:opacity-50 dark:hover:bg-neutral-800 dark:hover:text-red-300"><IconX className="h-3.5 w-3.5" /></button>}
     </div>
   </div>
 }

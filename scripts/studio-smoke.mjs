@@ -298,10 +298,73 @@ async function runBrowserSmoke(appUrl, upstreamRequests) {
     await client.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
       const originalFetch = window.fetch.bind(window);
       const cancelledParallelJobs = new Set();
+      let terminalDeleted = false;
+      let terminalPolled = false;
+      let resolveTerminalInitialHistory;
+      const terminalInitialHistory = new Promise((resolve) => { resolveTerminalInitialHistory = resolve; });
+      let releaseTerminalHistory;
+      const terminalHistoryGate = new Promise((resolve) => { releaseTerminalHistory = resolve; });
+      window.__cinlanReleaseTerminalHistory = () => releaseTerminalHistory();
+      window.__cinlanTerminalHistoryResolved = false;
       const json = (value) => new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
       window.fetch = async (input, init) => {
         const url = new URL(typeof input === 'string' ? input : input.url, location.href);
         const method = (init?.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase();
+        if (localStorage.getItem('__cinlan_terminal_smoke') === '1') {
+          const now = new Date().toISOString();
+          const failedJob = {
+            id: 'job_terminal_smoke', mode: 'GENERATE', status: 'FAILED', model: 'mock-sync-image',
+            prompt: 'terminal state smoke', parameters: { count: 1 }, result_url: null, result_urls: [],
+            attempt_count: 1, created_at: now, updated_at: now, completed_at: now,
+          };
+          if (url.pathname === '/api/v1/creative/config') {
+            return json({
+              enabled: true, database: 'postgresql', asset_storage: 'filesystem', planner_enabled: true,
+              features: { image: true, text: true, video: true },
+              feature_status: {
+                image: { configured: true, available: true, degraded: false, group_id: 7 },
+                text: { configured: true, available: true, degraded: false, group_id: 7 },
+                video: { configured: true, available: true, degraded: false, group_id: 7 },
+              },
+              api_key_login_enabled: true,
+            });
+          }
+          if (url.pathname === '/api/v1/creative/jobs' && method === 'GET') {
+            await terminalInitialHistory;
+            return json({ jobs: terminalDeleted ? [] : [{ ...failedJob, status: 'RUNNING', completed_at: null }], pagination: { page: 1, pageSize: 24, totalCount: terminalDeleted ? 0 : 1, totalPages: 1, hasMore: false } });
+          }
+          if (url.pathname === '/api/v1/tasks/job_terminal_smoke') {
+            terminalPolled = true;
+            return json({ id: failedJob.id, type: 'image', model: failedJob.model, status: 'FAILED', result_urls: [], error: 'Image generation is not enabled for this group', credits_used: 0 });
+          }
+          if (url.pathname === '/api/v1/creative/jobs/job_terminal_smoke/events') {
+            return json({ events: [] });
+          }
+          if (url.pathname === '/api/v1/creative/jobs/job_terminal_smoke' && method === 'DELETE') {
+            terminalDeleted = true;
+            return new Response(null, { status: 204 });
+          }
+          if (url.pathname === '/api/v1/generations' && method === 'GET') {
+            const refreshAfterTerminal = terminalPolled;
+            if (refreshAfterTerminal) await terminalHistoryGate;
+            const completedCount = terminalDeleted ? 15 : 14;
+            const completed = Array.from({ length: completedCount }, (_, index) => ({
+              id: 'job_terminal_work_' + index, type: 'image', model: 'mock-sync-image', prompt: 'completed work ' + index,
+              status: 'COMPLETED', result_url: 'data:image/png;base64,${PNG}', result_urls: ['data:image/png;base64,${PNG}'], expected_count: 1,
+              thumbnail_url: null, credits_used: 0, created_at: new Date(Date.now() - (index + 1) * 1000).toISOString(), error: null,
+            }));
+            window.__cinlanTerminalHistoryResolved = refreshAfterTerminal;
+            if (!refreshAfterTerminal) resolveTerminalInitialHistory();
+            return json({
+              generations: terminalDeleted ? completed : [...completed, ...(refreshAfterTerminal ? [{
+                id: failedJob.id, type: 'image', model: failedJob.model, prompt: failedJob.prompt, status: failedJob.status,
+                result_url: null, result_urls: [], expected_count: 1, thumbnail_url: null, credits_used: 0, created_at: now,
+                error: 'Image generation is not enabled for this group',
+              }] : [])],
+              pagination: { page: 1, pageSize: 24, totalCount: completed.length + (terminalDeleted ? 0 : 1), workCount: 15, totalPages: 1, hasMore: false },
+            });
+          }
+        }
         if (localStorage.getItem('__cinlan_parallel_smoke') === '1') {
           const now = new Date().toISOString();
           const jobs = [
@@ -478,6 +541,19 @@ async function runBrowserSmoke(appUrl, upstreamRequests) {
     await click(client, `item.getAttribute('data-testid') === 'cancel-creative-job' && !item.disabled`)
     await waitForEvaluation(client, `document.querySelectorAll('[data-testid="cancel-creative-job"]').length === 1`, 20_000)
     await client.evaluate(`(() => { localStorage.removeItem('__cinlan_parallel_smoke'); location.reload(); return true })()`)
+    await waitForEvaluation(client, `document.readyState === 'complete' && document.body.innerText.includes('Mock Sync Image')`, 30_000)
+
+    await client.evaluate(`(() => { localStorage.setItem('__cinlan_terminal_smoke', '1'); location.reload(); return true })()`)
+    await waitForEvaluation(client, `document.querySelector('[data-testid="delete-creative-job"]') !== null`, 10_000)
+    assert.equal(await client.evaluate(`window.__cinlanTerminalHistoryResolved`), false, 'Terminal task only appeared after the delayed history refresh')
+    assert.equal(await client.evaluate(`document.body.innerText.includes('Image generation is not enabled for this group')`), true, 'Terminal task did not expose its failure reason')
+    const workCountBeforeDelete = await client.evaluate(`document.querySelector('[data-testid="history-work-count"]')?.textContent`)
+    await click(client, `item.getAttribute('data-testid') === 'delete-creative-job' && !item.disabled`)
+    await waitForEvaluation(client, `document.querySelector('[data-testid="delete-creative-job"]') === null`, 2_000)
+    await client.evaluate(`window.__cinlanReleaseTerminalHistory()`)
+    await waitForEvaluation(client, `document.querySelector('[data-testid="history-work-count"]')?.textContent === ${JSON.stringify(workCountBeforeDelete)}`, 10_000)
+    assert.equal(await client.evaluate(`document.querySelector('[data-testid="history-work-count"]')?.textContent`), workCountBeforeDelete, 'Deleting a failed task changed the stable work count')
+    await client.evaluate(`(() => { localStorage.removeItem('__cinlan_terminal_smoke'); location.reload(); return true })()`)
     await waitForEvaluation(client, `document.readyState === 'complete' && document.body.innerText.includes('Mock Sync Image')`, 30_000)
 
     await click(client, `item.getAttribute('aria-label') === '文字'`)
