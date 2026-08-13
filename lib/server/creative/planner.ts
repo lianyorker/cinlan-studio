@@ -93,10 +93,13 @@ export async function createCreativePlan(input: {
   }
 }
 
-export function compileCreativePrompt(prompt: string, plan: CreativePlan, referenceCount: number, aspectRatio?: string, transparentBackground = false) {
+export function compileCreativePrompt(prompt: string, plan: CreativePlan, referenceCount: number, aspectRatio?: string, transparentBackground = false, requestedWidth?: number, requestedHeight?: number) {
+  const requestedCanvas = requestedWidth && requestedHeight ? `${requestedWidth}x${requestedHeight}` : undefined
   const sections = [
     'Produce a polished, production-ready final image.',
-    aspectRatio
+    requestedCanvas
+      ? `Requested canvas: ${requestedCanvas} pixels (${aspectRatio || 'use the same orientation and proportion'}). Preserve this width-to-height proportion as a hard requirement even if the provider renders at its nearest supported pixel dimensions.`
+      : aspectRatio
       ? `Output canvas: ${aspectRatio}. This explicitly requested aspect ratio is a hard requirement.`
       : 'Choose the most appropriate square, portrait, or landscape canvas from the user instruction and composition. Do not force a square canvas.',
     transparentBackground
@@ -111,7 +114,9 @@ export function compileCreativePrompt(prompt: string, plan: CreativePlan, refere
     plan.composition ? `Composition: ${plan.composition}` : '',
     plan.output_checks.length ? `Output checks: ${plan.output_checks.join('; ')}.` : '',
     `User instruction: ${prompt}`,
-    aspectRatio
+    requestedCanvas
+      ? `Final output constraint: compose for ${requestedCanvas} pixels and keep its exact ${aspectRatio || 'requested'} proportion; do not substitute a square or generic portrait canvas.`
+      : aspectRatio
       ? `Final output constraint: render the finished image on an exact ${aspectRatio} canvas.`
       : 'Final output constraint: infer the canvas orientation from the user instruction and visual composition.',
   ]

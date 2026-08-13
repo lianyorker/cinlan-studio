@@ -625,7 +625,7 @@ async function runBrowserSmoke(appUrl, upstreamRequests) {
     await waitForEvaluation(client, `document.body.innerText.includes('Delete selected (1)')`)
     await click(client, `item.textContent?.trim() === 'Done'`)
     await click(client, `item.closest('[data-history-key]')?.querySelector('img') && !item.disabled`)
-    await waitForEvaluation(client, `document.body.innerText.includes('Transparent PNG') && document.body.innerText.includes('White PNG')`)
+    await waitForEvaluation(client, `document.body.innerText.includes('Download') && !document.body.innerText.includes('Transparent PNG') && !document.body.innerText.includes('White PNG')`)
     await click(client, `item.getAttribute('aria-label') === 'Close'`)
     const visibleQuality = `item.getAttribute('aria-label') === 'Quality' && item.getBoundingClientRect().width > 0 && item.getBoundingClientRect().height > 0 && getComputedStyle(item).visibility !== 'hidden'`
     await click(client, visibleQuality)
@@ -778,6 +778,15 @@ async function main() {
     const body = request.method === 'POST' ? await readBody(request) : {}
     requests.push({ path: url.pathname, method: request.method, headers: request.headers, body, at: Date.now() })
 
+    if (request.method === 'POST' && url.pathname === '/api/v1/auth/login') {
+      if (body.email === 'invalid@example.com') return json(response, 401, { message: 'invalid credentials' })
+      return json(response, 200, {
+        access_token: 'embed-access-token',
+        refresh_token: 'smoke-refresh-token',
+        expires_in: 3600,
+        user: { id: 1, email: 'login@example.com', username: 'Login User', balance: 88 },
+      })
+    }
     if (request.method === 'GET' && url.pathname === '/api/v1/auth/me') {
       const token = String(request.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
       if (token !== 'embed-access-token') return json(response, 401, { message: 'invalid embed token' })
@@ -808,9 +817,6 @@ async function main() {
       return json(response, 200, { data: models.map((id) => ({ id })) })
     }
     if (request.method === 'POST' && url.pathname === '/v1/images/generations/async') {
-      if (body.prompt === 'transparent compatibility smoke' && body.background === 'transparent') {
-        return json(response, 400, { message: 'Transparent background is not supported for this model.' })
-      }
       if (body.model === 'mock-gateway-fallback-image' || body.model === 'mock-gateway-fail-image') {
         response.writeHead(502)
         response.end()
@@ -934,6 +940,16 @@ async function main() {
     const previewVideoFields = preview.value.models.find((model) => model.slug === 'grok-imagine-video')?.form_config?.fields ?? []
     assert.deepEqual(previewVideoFields.map((field) => field.type), ['aspect_ratio', 'duration'])
 
+    const accountLogin = await fetchJson(`${appUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'login@example.com', password: 'smoke-password' }),
+    })
+    assert.equal(accountLogin.response.status, 200)
+    assert.ok(cookieFrom(accountLogin.response).startsWith('cinlan_session='))
+    assert.equal(accountLogin.value.user.id, 1)
+    assert.equal(accountLogin.value.balance, 88)
+
     const embeddedMismatch = await fetchJson(`${appUrl}/api/v1/auth/embed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1042,7 +1058,7 @@ async function main() {
     assert.equal(gatewayFailure.response.status, 502)
     assert.equal(gatewayFailure.value.code, 'UPSTREAM_HTTP_502')
     assert.notEqual(gatewayFailure.value.message, '<none>')
-    assert.match(gatewayFailure.value.message, /Bad Gateway|HTTP 502/)
+    assert.match(gatewayFailure.value.message, /Sub2API upstream request failed|Bad Gateway|HTTP 502/)
 
     const autoSizeGeneration = await fetchJson(`${appUrl}/api/v1/generate/image`, {
       method: 'POST',
@@ -1056,33 +1072,15 @@ async function main() {
     assert.equal(autoSizeCall?.body?.output_format, undefined)
     assert.equal(autoSizeCall?.body?.aspect_ratio, undefined)
 
-    const transparentFallback = await fetchJson(`${appUrl}/api/v1/generate/image`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Cookie: cookie },
-      body: JSON.stringify({ model: 'gpt-image-2', prompt: 'transparent compatibility smoke', background: 'transparent' }),
-    })
-    assert.equal(transparentFallback.response.status, 200)
-    const transparentCalls = requests.filter((item) => item.path === '/v1/images/generations/async'
-      && String(item.headers['idempotency-key'] || '').startsWith('image_')
-      && (item.body?.prompt === 'transparent compatibility smoke' || String(item.body?.prompt || '').includes('Alpha transparency is unavailable')))
-    assert.equal(transparentCalls.length, 2)
-    assert.equal(transparentCalls[0].body.background, 'transparent')
-    assert.equal(transparentCalls[0].body.output_format, 'png')
-    assert.equal(transparentCalls[1].body.background, undefined)
-    assert.equal(transparentCalls[1].body.output_format, 'png')
-    assert.match(transparentCalls[1].body.prompt, /flat solid white background/i)
-    assert.match(transparentCalls[1].body.prompt, /no checkerboard/i)
-    assert.equal(transparentCalls[1].headers['idempotency-key'], `${transparentCalls[0].headers['idempotency-key']}-opaque`)
-
-    const inferredTransparent = await fetchJson(`${appUrl}/api/v1/generate/image`, {
+    const disabledTransparentInference = await fetchJson(`${appUrl}/api/v1/generate/image`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Cookie: cookie },
       body: JSON.stringify({ model: 'gpt-image-2', prompt: 'logo，透明底图' }),
     })
-    assert.equal(inferredTransparent.response.status, 200)
-    const inferredTransparentCall = requests.find((item) => item.path === '/v1/images/generations/async' && item.body?.prompt === 'logo，透明底图')
-    assert.equal(inferredTransparentCall?.body?.background, 'transparent')
-    assert.equal(inferredTransparentCall?.body?.output_format, 'png')
+    assert.equal(disabledTransparentInference.response.status, 200)
+    const disabledTransparentCall = requests.find((item) => item.path === '/v1/images/generations/async' && item.body?.prompt === 'logo，透明底图')
+    assert.equal(disabledTransparentCall?.body?.background, undefined)
+    assert.equal(disabledTransparentCall?.body?.output_format, undefined)
 
     const jpegGeneration = await fetchJson(`${appUrl}/api/v1/generate/image`, {
       method: 'POST',
@@ -1122,6 +1120,17 @@ async function main() {
       const inferredRatioCall = requests.find((item) => item.path === '/v1/images/generations/async' && item.body?.prompt === prompt)
       assert.equal(inferredRatioCall?.body?.size, expectedSize)
     }
+
+    const bannerPrompt = '尺寸调整 1600*440 电商租赁 Banner，绿色渐变科技感背景；左侧大标题「租享好物狂欢季」；尺寸长440宽1660'
+    const bannerGeneration = await fetchJson(`${appUrl}/api/v1/generate/image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ model: 'gpt-image-2', prompt: bannerPrompt, quality: 'high' }),
+    })
+    assert.equal(bannerGeneration.response.status, 200)
+    const bannerCall = requests.find((item) => item.path === '/v1/images/generations/async' && item.body?.prompt === bannerPrompt)
+    assert.equal(bannerCall?.body?.size, '1600x440')
+    assert.equal(bannerCall?.body?.aspect_ratio, undefined)
 
     const squareGeneration = await fetchJson(`${appUrl}/api/v1/generate/image`, {
       method: 'POST',

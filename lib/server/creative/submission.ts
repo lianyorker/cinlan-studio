@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { CreativeAnalysisMode, ModelCapabilities } from '@/lib/creative-types'
-import { imageAspectRatioFromPrompt } from '@/lib/image-aspect-ratio'
-import { imageRequestsTransparentBackground } from '@/lib/image-output'
+import { imageSizeIntentFromPrompt, normalizeImageAspectRatio } from '@/lib/image-aspect-ratio'
 import { assetIdFromUrl, parseDataImage, storeCreativeAsset } from './assets'
 import { creativeSubmissionContext } from './context'
 import { CreativeCoreError } from './errors'
@@ -60,16 +59,24 @@ function normalizedParameters(input: Record<string, unknown>, capability: ModelC
   const requestedCount = Number(input.count ?? input.n ?? 1)
   if (!Number.isInteger(requestedCount) || requestedCount < 1) throw new CreativeCoreError(400, 'INVALID_OUTPUT_COUNT', 'Output count must be a positive integer')
   const count = Math.min(capability.max_outputs, Math.min(4, requestedCount))
-  const aspectRatio = String(input.aspect_ratio ?? input.aspectRatio ?? imageAspectRatioFromPrompt(prompt, capability.aspect_ratios) ?? '')
+  const promptSize = imageSizeIntentFromPrompt(prompt, capability.aspect_ratios)
+  const explicitSize = typeof input.size === 'string' ? /^(\d{2,5})x(\d{2,5})$/i.exec(input.size.trim()) : null
+  const explicitAspectRatio = explicitSize ? normalizeImageAspectRatio(`${explicitSize[1]}:${explicitSize[2]}`) : undefined
+  const aspectRatio = String(input.aspect_ratio ?? input.aspectRatio ?? promptSize?.aspectRatio ?? explicitAspectRatio ?? '')
   const quality = String(input.quality ?? capability.qualities[capability.qualities.length - 1] ?? '')
   const resolution = String(input.resolution ?? capability.resolutions[capability.resolutions.length - 1] ?? '')
   const analysisMode: CreativeAnalysisMode = input.analysis_mode === 'standard' ? 'standard' : 'deep'
-  if (aspectRatio && !capability.aspect_ratios.includes(aspectRatio)) throw new CreativeCoreError(400, 'INVALID_ASPECT_RATIO', 'Selected model does not support this aspect ratio')
+  if (aspectRatio && !capability.aspect_ratios.includes(aspectRatio) && aspectRatio !== promptSize?.aspectRatio) {
+    throw new CreativeCoreError(400, 'INVALID_ASPECT_RATIO', 'Selected model does not support this aspect ratio')
+  }
   if (quality && !capability.qualities.includes(quality)) throw new CreativeCoreError(400, 'INVALID_IMAGE_QUALITY', 'Selected model does not support this quality')
   if (resolution && !capability.resolutions.includes(resolution.toUpperCase())) throw new CreativeCoreError(400, 'INVALID_IMAGE_RESOLUTION', 'Selected model does not support this resolution')
+  const requestedPromptSize = promptSize?.source === 'dimensions' ? promptSize : undefined
   return {
     count,
     aspect_ratio: aspectRatio || undefined,
+    requested_width: explicitSize ? Number(explicitSize[1]) : requestedPromptSize?.width,
+    requested_height: explicitSize ? Number(explicitSize[2]) : requestedPromptSize?.height,
     quality: quality || undefined,
     resolution: resolution ? resolution.toUpperCase() : undefined,
     analysis_mode: analysisMode,
@@ -106,10 +113,6 @@ export async function submitCreativeImageJob(request: Request) {
   parameters.provider_credential_rotation = providerCredential.rotationVersion
   parameters.provider_credential_retry_count = 0
   parameters.provider_credential_rejected_rotation = 0
-  if (/^gpt-image-/i.test(model) && !parameters.background && imageRequestsTransparentBackground(prompt)) {
-    parameters.background = 'transparent'
-    parameters.output_format ||= 'png'
-  }
   const parentJobId = typeof parameters.parent_job_id === 'string' ? parameters.parent_job_id : undefined
   if (parentJobId) {
     const parent = await getJobForOwner(owner.id, parentJobId)

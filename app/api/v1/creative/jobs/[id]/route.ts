@@ -24,9 +24,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const input = await request.json().catch(() => ({})) as { action?: string }
     if (input.action === 'retry') {
       const source = await getJobForOwner(owner.id, id)
-      if (source.parameters.operation === 'background_removal') {
-        throw new CreativeCoreError(409, 'BACKGROUND_REMOVAL_RETRY_FROM_ASSET', 'Retry background removal from the source asset')
-      }
       if (source.status !== 'FAILED' && source.status !== 'EXPIRED') {
         throw new CreativeCoreError(409, 'CREATIVE_JOB_NOT_RETRYABLE', 'Only failed or expired creative jobs can be retried')
       }

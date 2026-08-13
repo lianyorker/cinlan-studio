@@ -61,10 +61,6 @@ export function CreativeActivity({
       'creative.activity.cancelled': t.creative.cancelled,
       'creative.activity.expired': t.creative.expired,
       'creative.activity.failed': t.creative.failed,
-      'creative.activity.background_removal_created': t.creative.created,
-      'creative.activity.background_removing': t.creative.generating,
-      'creative.activity.background_removal_completed': t.creative.completed,
-      'creative.activity.background_removal_failed': t.creative.failed,
     }
     return (event: CreativeEvent) => {
       if (event.message_key === 'creative.activity.queued') {

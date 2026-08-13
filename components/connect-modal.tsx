@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStudio } from '@/lib/studio'
 import { Logo } from './logo'
 import { IconX } from './icons'
@@ -22,6 +22,7 @@ export function ConnectModal({ open, initialMode = 'login', onClose }: { open: b
   const [maskedEmail, setMaskedEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const submitting = useRef(false)
 
   useEffect(() => {
     if (!open) return
@@ -36,6 +37,8 @@ export function ConnectModal({ open, initialMode = 'login', onClose }: { open: b
   if (!open) return null
 
   async function submit() {
+    if (submitting.current) return
+    submitting.current = true
     setBusy(true)
     setError('')
     try {
@@ -58,8 +61,10 @@ export function ConnectModal({ open, initialMode = 'login', onClose }: { open: b
       setEditingConnection(false)
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : t.connect.connectionFailed)
+      const timedOut = err instanceof DOMException && ['AbortError', 'TimeoutError'].includes(err.name)
+      setError(timedOut ? t.connect.requestTimeout : err instanceof Error ? err.message : t.connect.connectionFailed)
     } finally {
+      submitting.current = false
       setBusy(false)
     }
   }

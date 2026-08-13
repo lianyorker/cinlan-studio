@@ -1,6 +1,6 @@
 # Cinlan Studio
 
-Cinlan Studio는 이미지 생성, 이미지 편집, 구조화된 텍스트 생성, 영구적인 제작 기록을 제공하는 AI 제작 워크스페이스입니다. `0.2.5`는 Next.js BFF, PostgreSQL Creative Core, 독립 Worker로 구성됩니다.
+Cinlan Studio는 이미지 생성, 이미지 편집, 구조화된 텍스트 생성, 영구적인 제작 기록을 제공하는 AI 제작 워크스페이스입니다. `0.2.6`는 Next.js BFF, PostgreSQL Creative Core, 독립 Worker로 구성됩니다.
 
 [English](./README.md) | [简体中文](./README.zh.md) | [日本語](./README.ja.md) | **한국어**
 
@@ -12,7 +12,6 @@ Cinlan Studio는 이미지 생성, 이미지 편집, 구조화된 텍스트 생�
 - 스크롤 가능한 텍스트 기록과 임베디드 페이지에서도 동작하는 결과 복사.
 - 원본 이미지 스트리밍, WebP 썸네일, ETag, Owner 단위 접근 격리.
 - 체크무늬 또는 단순 배경만 제거하고 텍스트와 버튼을 보존하는 실제 alpha PNG 생성.
-- 복잡한 사진의 피사체 분리는 선택적으로 Alibaba Cloud `SegmentCommonImage` 사용 가능.
 - Sub2API 로그인, 2FA, 임베디드 SSO, 서버 관리 owner/group 자격 증명.
 
 ## 개발

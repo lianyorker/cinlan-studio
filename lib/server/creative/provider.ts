@@ -1,6 +1,5 @@
 import { mediaTaskDetails, resultError, resultUrls } from '../generation'
 import { newRequestId, Sub2ApiError, sub2apiFetch } from '../sub2api'
-import { opaqueBackgroundFallbackPrompt } from '@/lib/image-output'
 
 export interface ProviderReference {
   bytes: Uint8Array
@@ -11,7 +10,8 @@ export interface ProviderReference {
 
 const RESOLUTION_MAX_EDGE: Record<string, number> = { '1K': 1024, '2K': 2048, '4K': 3840 }
 
-export function sizeForResolution(aspectRatio: string, resolution: string) {
+export function sizeForResolution(aspectRatio: string, resolution: string, requested?: { width: number; height: number }) {
+  if (requested?.width && requested.height) return `${requested.width}x${requested.height}`
   const maxEdge = RESOLUTION_MAX_EDGE[resolution.toUpperCase()]
   const parts = aspectRatio.split(':').map(Number)
   if (!maxEdge || parts.length !== 2 || !parts.every((value) => Number.isFinite(value) && value > 0)) return undefined
@@ -101,7 +101,10 @@ export async function requestProviderImage(input: {
   const aspectRatio = String(parameters.aspect_ratio ?? parameters.aspectRatio ?? '')
   const resolution = String(parameters.resolution ?? '')
   if (/^gpt-image-/i.test(input.model)) {
-    if (!parameters.size) parameters.size = aspectRatio ? sizeForResolution(aspectRatio, resolution || '1K') : 'auto'
+    const requestedWidth = Number(parameters.requested_width || 0)
+    const requestedHeight = Number(parameters.requested_height || 0)
+    const requested = requestedWidth > 0 && requestedHeight > 0 ? { width: requestedWidth, height: requestedHeight } : undefined
+    if (!parameters.size) parameters.size = aspectRatio ? sizeForResolution(aspectRatio, resolution || '1K', requested) : 'auto'
     const outputFormat = String(parameters.output_format || '').toLowerCase()
     const background = String(parameters.background || '').toLowerCase()
     if (!outputFormat && background === 'transparent') parameters.output_format = 'png'
@@ -109,6 +112,8 @@ export async function requestProviderImage(input: {
     delete parameters.aspectRatio
   }
   delete parameters.resolution
+  delete parameters.requested_width
+  delete parameters.requested_height
   delete parameters.analysis_mode
   delete parameters.parent_job_id
   delete parameters.idempotency_key
@@ -151,24 +156,13 @@ export async function requestProviderImage(input: {
     }
   }
 
-  async function sendWithCompatibilityFallback() {
-    try {
-      return await send(parameters, input.prompt, input.idempotencyKey)
-    } catch (error) {
-      if (!transparentBackgroundUnsupported(error) || String(parameters.background || '').toLowerCase() !== 'transparent') throw error
-      const fallbackParameters = { ...parameters }
-      delete fallbackParameters.background
-      return send(fallbackParameters, opaqueBackgroundFallbackPrompt(input.prompt), `${input.idempotencyKey}-opaque`)
-    }
-  }
-
   let payload: unknown
   try {
-    payload = await sendWithCompatibilityFallback()
+    payload = await send(parameters, input.prompt, input.idempotencyKey)
   } catch (error) {
     if (!retryableGroupError(error)) throw error
     await new Promise((resolve) => setTimeout(resolve, 800))
-    payload = await sendWithCompatibilityFallback()
+    payload = await send(parameters, input.prompt, input.idempotencyKey)
   }
   const value = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
   const id = String(value.id ?? value.task_id ?? value.request_id ?? '')

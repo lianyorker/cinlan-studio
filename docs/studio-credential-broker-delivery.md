@@ -66,7 +66,7 @@ Last updated: 2026-08-11.
 
 - Account login: password, 2FA, embedded SSO, token refresh.
 - Credential consumers: model catalog, legacy image generation/edit, text generation, video generation, task polling, Creative planner, Creative provider submit/poll.
-- Owner creation without provider use: upload, asset import, background-removal quota and background-removal submission.
+- Owner creation without provider use: upload and asset access.
 - Navigation entry paths: desktop sidebar, mobile sidebar, restored tab state, reconnect actions, model error recovery.
 - Credential invalidation: user deletes key, disables key, group deletion, access token expiry, refresh token expiry, Studio logout, concurrent requests.
 
@@ -82,13 +82,13 @@ Last updated: 2026-08-11.
 
 ## Baseline Evidence
 
-Before this module change, version `0.2.5` passed `npm ci --dry-run`, `npx tsc --noEmit`, background-removal, transparency, asset-thumbnail, browser smoke, production build and standalone smoke. PostgreSQL integration was skipped because `CINLAN_TEST_DATABASE_URL` was not configured. The real Alibaba and Sub2API provider paths were not called during that baseline.
+Before this module change, version `0.2.5` passed `npm ci --dry-run`, `npx tsc --noEmit`, asset-thumbnail, browser smoke, production build and standalone smoke. PostgreSQL integration was skipped because `CINLAN_TEST_DATABASE_URL` was not configured. The real Sub2API provider paths were not called during that baseline.
 
 ## Delivery Boundary
 
 - Allowed: Cinlan Studio source, Studio PostgreSQL migrations, Studio API/client contracts, tests and deployment docs.
 - Forbidden: Sub2API database migrations, arbitrary user-key mutation, secret logging, production deployment, Git push/release.
-- Existing uncommitted background-removal and `0.2.5` work must be preserved.
+- Existing uncommitted `0.2.5` work must be preserved.
 
 ## Production Configuration
 

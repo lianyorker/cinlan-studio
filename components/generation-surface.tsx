@@ -14,7 +14,6 @@ import type { LocalProgress } from '@/lib/local/types'
 import type { GenStatus, Model, Task, Example } from '@/lib/types'
 import type { CreativeAnalysisMode, CreativeJob } from '@/lib/creative-types'
 import { imageAspectRatioFromPrompt, imageAspectRatioValue } from '@/lib/image-aspect-ratio'
-import { imageRequestsTransparentBackground } from '@/lib/image-output'
 import { IconArrowUp, IconChevronDown, IconDownload, IconImage, IconVideo, IconMinus, IconPlus } from './icons'
 import { LocalFunnel } from './local-funnel'
 import { ModelLogo } from './model-visual'
@@ -298,10 +297,6 @@ export function GenerationSurface({
     if (!isVideo && !body.aspectRatio) {
       const inferredAspectRatio = imageAspectRatioFromPrompt(promptOverride, model.capabilities?.aspect_ratios)
       if (inferredAspectRatio) body.aspectRatio = inferredAspectRatio
-    }
-    if (!isVideo && /^gpt-image-/i.test(model.slug) && imageRequestsTransparentBackground(promptOverride)) {
-      body.background = 'transparent'
-      body.output_format = 'png'
     }
     // model-specific field keys the generic map doesn't cover
     if (model.slug === 'kling-3-mc') {

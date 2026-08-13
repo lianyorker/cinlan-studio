@@ -1,6 +1,6 @@
 # Cinlan Studio
 
-Cinlan Studio is Cinlan's AI creation workspace for image generation, image editing, structured text generation, and durable creative history. Version `0.2.5` uses a same-origin Next.js BFF, PostgreSQL Creative Core, and an independent worker so long-running jobs can survive refreshes and process restarts.
+Cinlan Studio is Cinlan's AI creation workspace for image generation, image editing, structured text generation, and durable creative history. Version `0.2.6` uses a same-origin Next.js BFF, PostgreSQL Creative Core, and an independent worker so long-running jobs can survive refreshes and process restarts.
 
 **English** | [简体中文](./README.zh.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Deployment](./deploy/DEPLOY.md)
 
@@ -12,8 +12,7 @@ Cinlan Studio is Cinlan's AI creation workspace for image generation, image edit
 - Markdown and GFM rendering for text results, including headings, lists, tables, links, and code blocks.
 - Scrollable text history with reliable result copying in normal pages and embedded Sub2API pages.
 - Owner-isolated image assets, streamed originals, cached WebP thumbnails, ETag support, and private browser caching.
-- Layout-preserving checkerboard or simple-background removal that creates a real alpha PNG without deleting text, buttons, or other design elements.
-- Optional Alibaba Cloud `SegmentCommonImage` fallback for complex-photo subject extraction. It is not required for checkerboard removal.
+- Prompt size parsing for ratios, named orientations, and explicit dimensions such as `1600x440`.
 - Sub2API account login, 2FA, embedded SSO, and server-managed per-owner/per-group credentials. Provider keys are never exposed to the browser.
 - Capability-based image, text, and video navigation. A missing or deleted group disables only its corresponding capability.
 
@@ -70,15 +69,6 @@ CREATIVE_IN_PROCESS_WORKER=true
 
 Production must set `CREATIVE_IN_PROCESS_WORKER=false` and run `npm run worker:creative` as a separate service.
 
-Alibaba Cloud credentials are optional. Configure them only when complex-photo subject extraction is required:
-
-```dotenv
-ALIBABA_CLOUD_ACCESS_KEY_ID=
-ALIBABA_CLOUD_ACCESS_KEY_SECRET=
-ALIBABA_CLOUD_REGION_ID=cn-shanghai
-ALIBABA_CLOUD_IMAGESEG_ENDPOINT=imageseg.cn-shanghai.aliyuncs.com
-```
-
 ## Commands
 
 | Command | Purpose |
@@ -89,8 +79,7 @@ ALIBABA_CLOUD_IMAGESEG_ENDPOINT=imageseg.cn-shanghai.aliyuncs.com
 | `npm run db:migrate` | Apply PostgreSQL migrations |
 | `npm run worker:creative` | Start the independent Creative Worker |
 | `npm run test:markdown` | Verify Markdown/GFM rendering |
-| `npm run test:transparency` | Verify alpha and layout-preserving background processing |
-| `npm run test:background-removal` | Verify optional Alibaba input normalization and quota rules |
+| `npm run test:image-size` | Verify explicit dimensions, ratios, and orientation parsing |
 | `npm run test:assets` | Verify thumbnail sizing, cache, ETag, streaming, and concurrency |
 | `npm run test:smoke` | Run BFF and browser smoke coverage |
 | `npm run test:standalone` | Start and probe the standalone build |
@@ -124,7 +113,6 @@ ALIBABA_CLOUD_IMAGESEG_ENDPOINT=imageseg.cn-shanghai.aliyuncs.com
 | Read / cancel / retry / delete a job | `GET|PATCH|DELETE /api/v1/creative/jobs/:id` |
 | Job activity | `GET /api/v1/creative/jobs/:id/events` |
 | Read / delete an asset | `GET|DELETE /api/v1/creative/assets/:id` |
-| Optional subject extraction | `POST /api/v1/creative/assets/:id/remove-background` |
 
 Canonical job flow:
 
@@ -154,7 +142,6 @@ Back up PostgreSQL, `CREATIVE_ASSET_STORAGE_DIR`, and the stable `CINLAN_SESSION
 - [BFF and storage architecture](./docs/deployment-bff.md)
 - [Creative Core delivery baseline](./docs/creative-core-delivery.md)
 - [PostgreSQL operations](./docs/creative-core-postgresql.md)
-- [Checkerboard and optional subject extraction](./docs/background-removal-delivery.md)
 - [Studio Credential Broker](./docs/studio-credential-broker-delivery.md)
 
 ## License

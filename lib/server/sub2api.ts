@@ -71,11 +71,22 @@ export async function sub2apiFetch<T>(
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
   else if (apiKey) headers.set('Authorization', `Bearer ${apiKey}`)
 
-  const response = await fetch(`${SUB2API_BASE_URL}${path}`, {
-    ...requestInit,
-    headers,
-    cache: 'no-store',
-  })
+  let response: Response
+  try {
+    response = await fetch(`${SUB2API_BASE_URL}${path}`, {
+      ...requestInit,
+      headers,
+      cache: 'no-store',
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      throw new Sub2ApiError(504, 'Sub2API upstream request timed out', 'SUB2API_TIMEOUT')
+    }
+    throw new Sub2ApiError(502, 'Sub2API upstream request failed', 'SUB2API_FETCH_FAILED', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
   const text = await response.text()
   const contentType = response.headers.get('content-type') ?? ''
   let payload: unknown = null
@@ -94,12 +105,15 @@ export async function sub2apiFetch<T>(
     const errorValue = envelope && typeof envelope === 'object' ? envelope.error : undefined
     const errorObject = errorValue && typeof errorValue === 'object' ? errorValue as Record<string, unknown> : null
     const statusText = response.statusText?.trim()
-    const message = String(
+    const rawMessage = String(
       errorObject?.message
       ?? envelope?.message
       ?? (statusText && statusText !== '<none>' ? statusText : undefined)
       ?? `Sub2API request failed with HTTP ${response.status}`
     )
+    const message = response.status >= 500 && /bad gateway|<html|nginx|cloudflare/i.test(rawMessage)
+      ? 'Sub2API upstream request failed'
+      : rawMessage
     const code = typeof errorObject?.code === 'string' ? errorObject.code : `UPSTREAM_HTTP_${response.status}`
     throw new Sub2ApiError(response.status, message, code, payload)
   }

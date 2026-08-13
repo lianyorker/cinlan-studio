@@ -3,13 +3,6 @@ import type { CreativeAnalysisMode, CreativeJobStatus } from '@/lib/creative-typ
 import { getImageTask } from '../generation'
 import { Sub2ApiError } from '../sub2api'
 import { creativeAssetBytes, storeCreativeResult } from './assets'
-import { removeBackgroundWithAliyun } from './aliyun-background-removal'
-import {
-  consumeBackgroundRemovalUsage,
-  recordBackgroundRemovalProviderRequest,
-  releaseBackgroundRemovalUsage,
-  restoreBackgroundRemovalReservation,
-} from './background-removal-quota'
 import { CreativeCoreError } from './errors'
 import { openCreativeCredential } from './identity'
 import { compileCreativePrompt, createCreativePlan } from './planner'
@@ -94,17 +87,6 @@ function requestedOutputCount(job: JobRecord) {
   return Math.min(4, Math.max(1, Number(job.parameters.count || 1)))
 }
 
-function isBackgroundRemovalJob(job: JobRecord) {
-  return job.parameters.operation === 'background_removal' && job.model === 'aliyun-segment-common-image'
-}
-
-function backgroundRemovalRetryable(error: unknown) {
-  if (error instanceof TypeError || (error instanceof DOMException && (error.name === 'AbortError' || error.name === 'TimeoutError'))) return true
-  if (!(error instanceof CreativeCoreError)) return false
-  if (/NOT_CONFIGURED|INPUT_TOO_LARGE|SOURCE_MISSING|InvalidAccessKey|Forbidden|Unauthorized/i.test(error.code)) return false
-  return error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500
-}
-
 async function finishCancellation(jobId: string, providerMayContinue = false) {
   const current = await getJobInternal(jobId)
   if (current.status === 'CANCELLED') return true
@@ -117,106 +99,6 @@ async function finishCancellation(jobId: string, providerMayContinue = false) {
     completed: true,
   })
   return true
-}
-
-async function processBackgroundRemovalJob(job: JobRecord) {
-  const existing = await jobAssets(job.id, 'output')
-  if (existing[0]) {
-    await transitionCreativeJob(job.id, {
-      status: 'COMPLETED',
-      phase: 'completed',
-      messageKey: 'creative.activity.background_removal_completed',
-      resultCount: 1,
-      completed: true,
-    })
-    return
-  }
-  const source = (await jobAssets(job.id, 'input'))[0]
-  if (!source) throw new CreativeCoreError(400, 'BACKGROUND_REMOVAL_SOURCE_MISSING', 'Background-removal source asset is missing')
-  await transitionCreativeJob(job.id, {
-    status: 'RUNNING',
-    phase: 'background_removal',
-    messageKey: 'creative.activity.background_removing',
-    attemptDelta: 1,
-    releaseLease: false,
-  })
-  let providerStarted = false
-  let result: Awaited<ReturnType<typeof removeBackgroundWithAliyun>>
-  try {
-    result = await removeBackgroundWithAliyun(await creativeAssetBytes(source), async () => {
-      providerStarted = await consumeBackgroundRemovalUsage(job.id)
-    })
-  } catch (error) {
-    if (await finishCancellation(job.id, providerStarted).catch(() => false)) {
-      if (!providerStarted) await releaseBackgroundRemovalUsage(job.id)
-      return
-    }
-    const details = errorDetails(error)
-    const current = await getJobInternal(job.id)
-    if (backgroundRemovalRetryable(error) && current.attempt_count < current.max_attempts) {
-      await restoreBackgroundRemovalReservation(job.id)
-      const delay = Math.min(30_000, 1000 * 2 ** Math.max(0, current.attempt_count - 1))
-      await transitionCreativeJob(job.id, {
-        status: 'QUEUED',
-        phase: 'retrying',
-        messageKey: 'creative.activity.retrying',
-        eventPayload: { attempt: current.attempt_count + 1, code: details.code },
-        errorCode: details.code,
-        errorMessage: details.message,
-        nextRunAt: new Date(Date.now() + delay),
-      })
-      return
-    }
-    await releaseBackgroundRemovalUsage(job.id)
-    await transitionCreativeJob(job.id, {
-      status: 'FAILED',
-      phase: 'failed',
-      messageKey: 'creative.activity.background_removal_failed',
-      eventPayload: { code: details.code },
-      errorCode: details.code,
-      errorMessage: details.message,
-      completed: true,
-    })
-    return
-  }
-  try {
-    await recordBackgroundRemovalProviderRequest(job.id, result.requestId || 'accepted')
-    if (await finishCancellation(job.id, true)) return
-    await transitionCreativeJob(job.id, {
-      status: 'VALIDATING',
-      phase: 'validating',
-      messageKey: 'creative.activity.validating',
-      providerRequestId: result.requestId || null,
-      releaseLease: false,
-    })
-    const asset = await storeCreativeResult(job.owner_id, result.imageUrl, 0)
-    await attachJobAsset(job.id, asset.id, 'output', 0)
-    await createCreativeVersion({
-      ownerId: job.owner_id,
-      jobId: job.id,
-      resultAssetId: asset.id,
-      prompt: job.prompt_original,
-    })
-    await transitionCreativeJob(job.id, {
-      status: 'COMPLETED',
-      phase: 'completed',
-      messageKey: 'creative.activity.background_removal_completed',
-      resultCount: 1,
-      completed: true,
-    })
-  } catch (error) {
-    if (await finishCancellation(job.id, true).catch(() => false)) return
-    const details = errorDetails(error)
-    await transitionCreativeJob(job.id, {
-      status: 'FAILED',
-      phase: 'failed',
-      messageKey: 'creative.activity.background_removal_failed',
-      eventPayload: { code: details.code },
-      errorCode: details.code,
-      errorMessage: details.message,
-      completed: true,
-    }).catch(() => {})
-  }
 }
 
 async function finalizeResults(job: JobRecord, outputAssets: Awaited<ReturnType<typeof jobAssets>>, recovered = false) {
@@ -306,7 +188,9 @@ async function submitJob(job: JobRecord, apiKey: string, signal: AbortSignal) {
       plan,
       inputReferences.length,
       String(job.parameters.aspect_ratio || '') || undefined,
-      String(job.parameters.background || '').toLowerCase() === 'transparent'
+      String(job.parameters.background || '').toLowerCase() === 'transparent',
+      Number(job.parameters.requested_width || 0) || undefined,
+      Number(job.parameters.requested_height || 0) || undefined
     )
     await transitionCreativeJob(job.id, {
       status: 'READY',
@@ -528,7 +412,6 @@ export async function processCreativeJob(job: JobRecord) {
   }, 20_000) : undefined
   try {
     if (job.status === 'CANCEL_REQUESTED') {
-      if (isBackgroundRemovalJob(job)) await releaseBackgroundRemovalUsage(job.id)
       await transitionCreativeJob(job.id, {
         status: 'CANCELLED',
         messageKey: 'creative.activity.cancelled',
@@ -536,10 +419,6 @@ export async function processCreativeJob(job: JobRecord) {
         eventPayload: { provider_may_continue: Boolean(job.provider_task_id) },
         completed: true,
       })
-      return
-    }
-    if (isBackgroundRemovalJob(job)) {
-      await processBackgroundRemovalJob(job)
       return
     }
     const credential = await workerCredential(job)
@@ -552,24 +431,7 @@ export async function processCreativeJob(job: JobRecord) {
       throw error
     }
   } catch (error) {
-    if (await finishCancellation(job.id, Boolean(job.provider_task_id)).catch(() => false)) {
-      if (isBackgroundRemovalJob(job)) await releaseBackgroundRemovalUsage(job.id)
-      return
-    }
-    if (isBackgroundRemovalJob(job)) {
-      const details = errorDetails(error)
-      await releaseBackgroundRemovalUsage(job.id)
-      await transitionCreativeJob(job.id, {
-        status: 'FAILED',
-        phase: 'failed',
-        messageKey: 'creative.activity.background_removal_failed',
-        eventPayload: { code: details.code },
-        errorCode: details.code,
-        errorMessage: details.message,
-        completed: true,
-      }).catch(() => {})
-      return
-    }
+    if (await finishCancellation(job.id, Boolean(job.provider_task_id)).catch(() => false)) return
     await failOrRetry(job, error)
   } finally {
     if (heartbeat) clearInterval(heartbeat)

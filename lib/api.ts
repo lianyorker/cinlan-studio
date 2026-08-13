@@ -1,6 +1,5 @@
 import type { Model, Me, Task, GenerateResult, Example, CloudGeneration, Paginated } from './types'
 import type { CreativeCoreConfig, CreativeEvent, CreativeJob } from './creative-types'
-import type { BackgroundRemovalQuota, BackgroundRemovalSubmission } from './background-removal-types'
 
 const BASE = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '')
 let embeddedBootstrap: Promise<boolean> | null = null
@@ -127,16 +126,6 @@ export const api = {
   creativeJob: (id: string) => request<CreativeJob>(`/api/v1/creative/jobs/${encodeURIComponent(id)}`, { cache: 'no-store' }),
   creativeEvents: (id: string, after = 0) =>
     request<{ events: CreativeEvent[] }>(`/api/v1/creative/jobs/${encodeURIComponent(id)}/events?after=${after}`, { cache: 'no-store' }),
-  backgroundRemovalQuota: () => request<BackgroundRemovalQuota>('/api/v1/creative/background-removal/quota', { cache: 'no-store' }),
-  importCreativeAsset: (url: string) => request<{ assetId: string; publicUrl: string }>('/api/v1/creative/assets/import', {
-    method: 'POST',
-    body: JSON.stringify({ url }),
-  }),
-  removeBackground: (assetId: string, idempotencyKey: string) =>
-    request<BackgroundRemovalSubmission & { already_transparent?: boolean; asset_id?: string }>(
-      `/api/v1/creative/assets/${encodeURIComponent(assetId)}/remove-background`,
-      { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ idempotency_key: idempotencyKey }) }
-    ),
   cancelCreativeJob: (id: string) =>
     request<CreativeJob>(`/api/v1/creative/jobs/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ action: 'cancel' }) }),
   retryCreativeJob: (id: string) =>

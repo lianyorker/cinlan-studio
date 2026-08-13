@@ -1,6 +1,6 @@
 # Cinlan Studio（星澜绘坊）
 
-Cinlan Studio 是 Cinlan 的 AI 创作工作台，覆盖图片生成、图片编辑、结构化文字生成和可恢复的创作历史。`0.2.5` 使用 Next.js 同源 BFF、PostgreSQL Creative Core 与独立 Worker，使长时间任务在刷新页面或进程重启后仍可恢复。
+Cinlan Studio 是 Cinlan 的 AI 创作工作台，覆盖图片生成、图片编辑、结构化文字生成和可恢复的创作历史。`0.2.6` 使用 Next.js 同源 BFF、PostgreSQL Creative Core 与独立 Worker，使长时间任务在刷新页面或进程重启后仍可恢复。
 
 [English](./README.md) | **简体中文** | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [部署手册](./deploy/DEPLOY.md)
 
@@ -12,8 +12,7 @@ Cinlan Studio 是 Cinlan 的 AI 创作工作台，覆盖图片生成、图片编
 - 文字结果支持 Markdown 与 GFM，正确展示标题、列表、表格、链接和代码块。
 - 历史文字详情可独立滚动，并能在普通页面和 Sub2API 嵌入页面可靠复制结果。
 - Owner 隔离的图片资产、原图流式传输、WebP 缩略图缓存、ETag 和私有浏览器缓存。
-- 将画进图片里的棋盘格或简单背景转换为真正带 alpha 的 PNG，同时保留标题、按钮和全部美术元素。
-- 可选的阿里云 `SegmentCommonImage` 复杂照片主体分割；去棋盘格不需要配置阿里云。
+- 支持从提示词解析比例、横竖版方向，以及 `1600x440` 这类明确像素尺寸。
 - Sub2API 账号登录、2FA、嵌入 SSO，以及服务端按 owner/group 管理的内部凭据；浏览器不会获得 provider key。
 - 图片、文字、视频入口按分组能力动态显示；分组未配置或被删除时，只禁用对应能力。
 
@@ -70,15 +69,6 @@ CREATIVE_IN_PROCESS_WORKER=true
 
 生产环境必须设置 `CREATIVE_IN_PROCESS_WORKER=false`，并将 `npm run worker:creative` 作为独立服务运行。
 
-阿里云只用于可选的复杂照片主体分割：
-
-```dotenv
-ALIBABA_CLOUD_ACCESS_KEY_ID=
-ALIBABA_CLOUD_ACCESS_KEY_SECRET=
-ALIBABA_CLOUD_REGION_ID=cn-shanghai
-ALIBABA_CLOUD_IMAGESEG_ENDPOINT=imageseg.cn-shanghai.aliyuncs.com
-```
-
 ## 常用命令
 
 | 命令 | 用途 |
@@ -89,8 +79,7 @@ ALIBABA_CLOUD_IMAGESEG_ENDPOINT=imageseg.cn-shanghai.aliyuncs.com
 | `npm run db:migrate` | 执行 PostgreSQL 迁移 |
 | `npm run worker:creative` | 启动独立 Creative Worker |
 | `npm run test:markdown` | 验证 Markdown/GFM 渲染 |
-| `npm run test:transparency` | 验证 alpha 和保构图背景处理 |
-| `npm run test:background-removal` | 验证可选阿里云输入规范化和额度规则 |
+| `npm run test:image-size` | 验证明晰尺寸、比例和横竖版提示词解析 |
 | `npm run test:assets` | 验证缩略图、缓存、ETag、流式读取和并发 |
 | `npm run test:smoke` | 执行 BFF 与浏览器烟雾测试 |
 | `npm run test:standalone` | 启动并探测 standalone 构建 |
@@ -124,7 +113,6 @@ ALIBABA_CLOUD_IMAGESEG_ENDPOINT=imageseg.cn-shanghai.aliyuncs.com
 | 查询 / 取消 / 重试 / 删除任务 | `GET|PATCH|DELETE /api/v1/creative/jobs/:id` |
 | 任务活动 | `GET /api/v1/creative/jobs/:id/events` |
 | 获取 / 删除资产 | `GET|DELETE /api/v1/creative/assets/:id` |
-| 可选主体分割 | `POST /api/v1/creative/assets/:id/remove-background` |
 
 标准任务状态：
 
@@ -154,7 +142,6 @@ PostgreSQL、`CREATIVE_ASSET_STORAGE_DIR` 和稳定的 `CINLAN_SESSION_SECRET` �
 - [BFF 与存储架构](./docs/deployment-bff.md)
 - [Creative Core 交付基线](./docs/creative-core-delivery.md)
 - [PostgreSQL 运维](./docs/creative-core-postgresql.md)
-- [棋盘格处理与可选主体分割](./docs/background-removal-delivery.md)
 - [Studio Credential Broker](./docs/studio-credential-broker-delivery.md)
 
 ## 许可证

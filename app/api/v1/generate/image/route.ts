@@ -1,13 +1,12 @@
 import { NextResponse } from 'next/server'
-import { imageAspectRatioFromPrompt } from '@/lib/image-aspect-ratio'
-import { imageRequestsTransparentBackground, opaqueBackgroundFallbackPrompt } from '@/lib/image-output'
+import { imageSizeIntentFromPrompt } from '@/lib/image-aspect-ratio'
 import { requireGenerationSession, canonicalBody, mediaTaskDetails, resultError, resultUrl } from '@/lib/server/generation'
 import { newRequestId, Sub2ApiError, sub2apiFetch } from '@/lib/server/sub2api'
 import { creativeCoreConfigured } from '@/lib/server/creative/config'
 import { creativeTaskContract } from '@/lib/server/creative/contracts'
 import { creativeErrorResponse } from '@/lib/server/creative/http'
 import { submitCreativeImageJob } from '@/lib/server/creative/submission'
-import { shouldFallbackToSynchronousImageEndpoint, sizeForResolution, transparentBackgroundUnsupported } from '@/lib/server/creative/provider'
+import { shouldFallbackToSynchronousImageEndpoint, sizeForResolution } from '@/lib/server/creative/provider'
 import { CreativeCoreError } from '@/lib/server/creative/errors'
 import { withStudioCredential } from '@/lib/server/creative/provider-credentials'
 
@@ -123,14 +122,12 @@ export async function POST(request: Request) {
     delete body.image
     if (input.quality !== undefined) body.quality = input.quality
     if (input.size !== undefined) body.size = input.size
-    if (/^gpt-image-/i.test(model) && !body.background && imageRequestsTransparentBackground(prompt)) {
-      body.background = 'transparent'
-      body.output_format ||= 'png'
-    }
-    const aspectRatio = String(input.aspect_ratio ?? input.aspectRatio ?? (/^gpt-image-/i.test(model) ? imageAspectRatioFromPrompt(prompt) : '') ?? '')
+    const promptSize = imageSizeIntentFromPrompt(prompt)
+    const aspectRatio = String(input.aspect_ratio ?? input.aspectRatio ?? (/^gpt-image-/i.test(model) ? promptSize?.aspectRatio : '') ?? '')
     const resolution = String(input.resolution ?? '')
     if (/^gpt-image-/i.test(model)) {
-      body.size ||= aspectRatio ? sizeForResolution(aspectRatio, resolution || '1K') : 'auto'
+      const requestedSize = promptSize?.source === 'dimensions' ? promptSize : undefined
+      body.size ||= aspectRatio ? sizeForResolution(aspectRatio, resolution || '1K', requestedSize) : 'auto'
       const outputFormat = String(body.output_format || '').toLowerCase()
       const background = String(body.background || '').toLowerCase()
       if (!outputFormat && background === 'transparent') body.output_format = 'png'
@@ -168,25 +165,13 @@ export async function POST(request: Request) {
         return sub2apiFetch('/v1/images/generations', { apiKey, method: 'POST', headers: requestHeaders, body: JSON.stringify(requestBody) })
       }
     }
-    async function requestWithCompatibilityFallback(apiKey: string) {
-      try {
-        return await requestImage(apiKey, body, headers)
-      } catch (error) {
-        if (!transparentBackgroundUnsupported(error) || String(body.background || '').toLowerCase() !== 'transparent') throw error
-        const fallbackBody = { ...body }
-        delete fallbackBody.background
-        const fallbackPrompt = opaqueBackgroundFallbackPrompt(prompt)
-        fallbackBody.prompt = fallbackPrompt
-        return requestImage(apiKey, fallbackBody, { 'Idempotency-Key': `${requestId}-opaque` }, fallbackPrompt)
-      }
-    }
     const result = await withStudioCredential(session, 'image', model, async (credential) => {
       try {
-        return await requestWithCompatibilityFallback(credential.apiKey)
+        return await requestImage(credential.apiKey, body, headers)
       } catch (error) {
         if (!groupImageDisabled(error)) throw error
         await wait(800)
-        return requestWithCompatibilityFallback(credential.apiKey)
+        return requestImage(credential.apiKey, body, headers)
       }
     })
     const value = result && typeof result === 'object' ? result as Record<string, unknown> : {}

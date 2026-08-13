@@ -402,7 +402,6 @@ export async function listCreativeJobs(ownerId: string, input: { type?: 'image';
        ) output ON true
       WHERE j.owner_id = $1
         AND j.deleted_at IS NULL
-        AND COALESCE(j.parameters->>'operation', '') <> 'background_removal'
         ${activeClause}
       ORDER BY j.created_at DESC LIMIT $2 OFFSET $3`,
     values
@@ -444,12 +443,6 @@ export async function requestCreativeCancellation(ownerId: string, jobId: string
     if (current.status !== 'CANCEL_REQUESTED') {
       await appendEventWithClient(client, jobId, 'status', 'cancelling', 'creative.activity.cancelling')
     }
-    await client.query(
-      `UPDATE background_removal_usage
-          SET status = 'released', updated_at = now()
-        WHERE job_id = $1 AND status = 'reserved'`,
-      [jobId]
-    )
     const result = await client.query<JobRecord>(
       `UPDATE creative_jobs
           SET status = 'CANCELLED',

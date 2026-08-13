@@ -252,24 +252,6 @@ export async function creativeAssetBytes(asset: AssetRecord) {
   return new Uint8Array(await readFile(localAssetPath(asset)))
 }
 
-export async function creativeAssetHasAlpha(asset: AssetRecord) {
-  const { data, info } = await sharp(localAssetPath(asset), { failOn: 'error', sequentialRead: true })
-    .rotate()
-    .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true })
-  const pixels = info.width * info.height
-  const required = Math.max(1, Math.ceil(pixels * 0.001))
-  let transparent = 0
-  for (let offset = 3; offset < data.length; offset += info.channels) {
-    if (data[offset] >= 250) continue
-    transparent += 1
-    if (transparent >= required) return true
-  }
-  return false
-}
-
 export async function creativeAssetFile(assetId: string) {
   const asset = await getAssetInternal(assetId)
   return { asset, bytes: await creativeAssetBytes(asset) }

@@ -1,8 +1,32 @@
 import { getStudioSession, setStudioSession, type StudioSession } from './session'
-import { newRequestId, sub2apiFetch, type Sub2ApiError } from './sub2api'
 import { creativeCoreConfigured } from './creative/config'
+import { CreativeCoreError } from './creative/errors'
 import { persistStudioIdentitySession } from './creative/provider-credentials'
+import { newRequestId, sub2apiFetch, type Sub2ApiError } from './sub2api'
 import { studioCapabilityGroups } from './studio-config'
+
+type LoginSessionCommitDependencies = {
+  setSession: typeof setStudioSession
+  persistIdentity: typeof persistStudioIdentitySession
+}
+
+const loginSessionCommitDependencies: LoginSessionCommitDependencies = {
+  setSession: setStudioSession,
+  persistIdentity: persistStudioIdentitySession,
+}
+
+export async function commitStudioLoginSession(
+  session: StudioSession,
+  dependencies: LoginSessionCommitDependencies = loginSessionCommitDependencies
+) {
+  await dependencies.setSession(session)
+  void dependencies.persistIdentity(session).catch((error: unknown) => {
+    console.error('[auth] Studio identity persistence deferred', {
+      name: error instanceof Error ? error.name : 'UnknownError',
+      code: error && typeof error === 'object' && 'code' in error ? String(error.code) : null,
+    })
+  })
+}
 
 type Sub2User = {
   id?: number
@@ -31,9 +55,11 @@ type Sub2Group = {
 function unwrapList<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[]
   if (value && typeof value === 'object') {
-    const obj = value as { items?: unknown; data?: unknown }
+    const obj = value as { items?: unknown; data?: unknown; results?: unknown; list?: unknown }
     if (Array.isArray(obj.items)) return obj.items as T[]
     if (Array.isArray(obj.data)) return obj.data as T[]
+    if (Array.isArray(obj.results)) return obj.results as T[]
+    if (Array.isArray(obj.list)) return obj.list as T[]
   }
   return []
 }
@@ -55,15 +81,17 @@ function activeKey(keys: Sub2Key[], group: Sub2Group) {
   return activeKeys.find((key) => isStudioKey(key) && belongsToGroup(key))
 }
 
-export async function createOrResolveStudioKey(accessToken: string): Promise<{ key: string; group?: Sub2Group }> {
+export async function createOrResolveStudioKey(accessToken: string, signal?: AbortSignal): Promise<{ key: string; group?: Sub2Group }> {
   const [keysResponse, groupsResponse] = await Promise.all([
-    sub2apiFetch<unknown>('/api/v1/keys?page=1&page_size=100', { accessToken }),
-    sub2apiFetch<unknown>('/api/v1/groups/available', { accessToken }),
+    sub2apiFetch<unknown>('/api/v1/keys?page=1&page_size=100', { accessToken, signal }),
+    sub2apiFetch<unknown>('/api/v1/groups/available', { accessToken, signal }),
   ])
   const keys = unwrapList<Sub2Key>(keysResponse)
   const groups = unwrapList<Sub2Group>(groupsResponse)
   const group = chooseGroup(groups)
-  if (!group?.id) throw new Error('Sub2API \u6ca1\u6709\u53ef\u7528\u4e8e Cinlan Studio \u7684\u5206\u7ec4\uff0c\u8bf7\u5148\u914d\u7f6e\u53ef\u7528\u5206\u7ec4')
+  if (!group?.id) {
+    throw new CreativeCoreError(409, 'STUDIO_GROUP_NOT_FOUND', 'Sub2API 没有可用于 Cinlan Studio 的分组，请先配置可用分组')
+  }
 
   const existing = activeKey(keys, group)
   if (existing?.key) return { key: existing.key, group }
@@ -73,8 +101,11 @@ export async function createOrResolveStudioKey(accessToken: string): Promise<{ k
     method: 'POST',
     headers: { 'Idempotency-Key': newRequestId('studio-key') },
     body: JSON.stringify({ name: 'Cinlan Studio', group_id: group.id }),
+    signal,
   })
-  if (!created.key) throw new Error('Sub2API 未返回新建 API Key，请检查 Key 创建权限')
+  if (!created.key) {
+    throw new CreativeCoreError(503, 'STUDIO_CREDENTIAL_UNAVAILABLE', 'Sub2API 未返回新建 API Key，请检查 Key 创建权限')
+  }
   return { key: created.key, group }
 }
 
@@ -83,36 +114,36 @@ export async function persistLoginSession(input: {
   refreshToken?: string
   expiresIn?: number
   user?: Sub2User | null
+  signal?: AbortSignal
 }) {
-  const user = input.user ?? await sub2apiFetch<Sub2User>('/api/v1/auth/me', { accessToken: input.accessToken })
+  const user = input.user ?? await sub2apiFetch<Sub2User>('/api/v1/auth/me', { accessToken: input.accessToken, signal: input.signal })
   if (user?.id === undefined || user.id === null) {
-    throw new Error('Sub2API did not return a user identity')
+    throw new CreativeCoreError(502, 'SUB2API_USER_IDENTITY_MISSING', 'Sub2API did not return a user identity')
   }
   const apiKey = creativeCoreConfigured()
     ? undefined
-    : (await createOrResolveStudioKey(input.accessToken)).key
+    : (await createOrResolveStudioKey(input.accessToken, input.signal)).key
   const session: StudioSession = {
     accessToken: input.accessToken,
     refreshToken: input.refreshToken,
     accessExpiresAt: input.expiresIn ? Date.now() + input.expiresIn * 1000 : undefined,
     apiKey,
     authMode: 'login',
-    user: { id: user?.id, email: user?.email, name: user?.username, balance: user?.balance ?? null },
+    user: { id: user.id, email: user.email, name: user.username, balance: user.balance ?? null },
   }
-  await persistStudioIdentitySession(session)
-  await setStudioSession(session)
+  await commitStudioLoginSession(session)
   return session
 }
 
-export async function persistEmbeddedSession(accessToken: string, expectedUserId?: string) {
-  const user = await sub2apiFetch<Sub2User>('/api/v1/auth/me', { accessToken })
+export async function persistEmbeddedSession(accessToken: string, expectedUserId?: string, signal?: AbortSignal) {
+  const user = await sub2apiFetch<Sub2User>('/api/v1/auth/me', { accessToken, signal })
   if (user?.id === undefined || user.id === null) {
-    throw new Error('Sub2API 未返回嵌入用户标识')
+    throw new CreativeCoreError(502, 'SUB2API_USER_IDENTITY_MISSING', 'Sub2API 未返回嵌入用户标识')
   }
   if (expectedUserId && String(user.id) !== expectedUserId) {
-    throw new Error('Sub2API 嵌入用户与令牌不匹配')
+    throw new CreativeCoreError(403, 'EMBED_USER_MISMATCH', 'Sub2API 嵌入用户与令牌不匹配')
   }
-  return persistLoginSession({ accessToken, user })
+  return persistLoginSession({ accessToken, user, signal })
 }
 
 export async function refreshStudioSession(session: StudioSession) {
@@ -129,14 +160,13 @@ export async function refreshStudioSession(session: StudioSession) {
     refreshToken: response.refresh_token ?? session.refreshToken,
     accessExpiresAt: response.expires_in ? Date.now() + response.expires_in * 1000 : undefined,
   }
-  await persistStudioIdentitySession(refreshed)
-  await setStudioSession(refreshed)
+  await commitStudioLoginSession(refreshed)
   return refreshed
 }
 
 export async function requireStudioSession() {
   const session = await getStudioSession()
-  if (!session) throw new Error('请先登录 Cinlan Studio')
+  if (!session) throw new CreativeCoreError(401, 'AUTH_REQUIRED', '请先登录 Cinlan Studio')
   return refreshStudioSession(session)
 }
 

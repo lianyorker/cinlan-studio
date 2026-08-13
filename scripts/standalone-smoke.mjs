@@ -79,6 +79,18 @@ try {
   assert.equal(embed.status, 400)
   assert.equal(embed.headers.get('content-security-policy'), "frame-ancestors 'self' https://api.cinlan.online")
 
+  const localhostOrigin = await fetch(`http://127.0.0.1:${port}/api/v1/auth/embed`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forwarded-Host': `localhost:${port}`,
+      'X-Forwarded-Proto': 'http',
+      Origin: `http://localhost:${port}`,
+    },
+    body: '{}',
+  })
+  assert.equal(localhostOrigin.status, 400)
+
   const blockedOrigin = await fetch(`http://127.0.0.1:${port}/api/v1/auth/embed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: 'https://untrusted.example' },

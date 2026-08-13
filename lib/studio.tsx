@@ -2,11 +2,11 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, bootstrapEmbeddedSession } from './api'
-import { FALLBACK_IMAGE, FALLBACK_VIDEO, TRENDING_STUBS, TRENDING_LIVE_SLUGS } from './catalog'
+import { FALLBACK_IMAGE, FALLBACK_VIDEO, TRENDING_LIVE_SLUGS, TRENDING_STUBS } from './catalog'
+import type { CreativeCoreConfig } from './creative-types'
 import { LOCAL_MODEL } from './local/model'
 import type { LocalState } from './local/types'
-import type { Model, Me } from './types'
-import type { CreativeCoreConfig } from './creative-types'
+import type { Me, Model } from './types'
 
 const INITIAL_LOCAL_STATE: LocalState = {
   status: 'offline',
@@ -78,6 +78,18 @@ const StudioCtx = createContext<StudioState>({
   refreshCreativeConfig: async () => {},
   refreshLocal: async () => {},
 })
+
+function meFromAuthResponse(data: any): Me | null {
+  const user = data?.user
+  if (!user || user.id === undefined || user.id === null) return null
+  return {
+    id: user.id,
+    email: user.email ?? null,
+    name: user.name ?? user.username ?? null,
+    credits: data.balance ?? user.balance ?? null,
+    currency: 'USD',
+  }
+}
 
 export function StudioProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
@@ -158,8 +170,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    // Note: no mounted-guard — under React StrictMode the dev double-invoke would
-    // otherwise drop the resolved catalog and leave us on the fallback list.
+    // No mounted guard: React StrictMode's dev double-invoke would otherwise
+    // drop the resolved catalog and leave us on the fallback list.
     let active = true
     void (async () => {
       await bootstrapEmbeddedSession().catch(() => false)
@@ -178,16 +190,17 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key }),
+      signal: AbortSignal.timeout(15_000),
     })
     const data = await response.json().catch(() => null)
     if (!response.ok) throw new Error(data?.message || 'Key 无效')
     try {
       const nextMe = await api.me()
       setMe(nextMe)
-      await Promise.all([refreshModels(), refreshCreativeConfig()])
-    } catch (e) {
+      void Promise.allSettled([refreshModels(), refreshCreativeConfig()])
+    } catch (error) {
       setMe(null)
-      throw e
+      throw error
     }
   }, [refreshCreativeConfig, refreshModels])
 
@@ -196,12 +209,14 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
+      signal: AbortSignal.timeout(15_000),
     })
     const data = await response.json().catch(() => null)
     if (!response.ok) throw new Error(data?.message || '登录失败')
     if (data?.requires_2fa) return data
-    setMe(await api.me())
-    await Promise.all([refreshModels(), refreshCreativeConfig()])
+    const nextMe = meFromAuthResponse(data) ?? await api.me()
+    setMe(nextMe)
+    void Promise.allSettled([refreshModels(), refreshCreativeConfig()])
     return data
   }, [refreshCreativeConfig, refreshModels])
 
@@ -210,11 +225,13 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ temp_token: tempToken, code }),
+      signal: AbortSignal.timeout(15_000),
     })
     const data = await response.json().catch(() => null)
     if (!response.ok) throw new Error(data?.message || '二次验证失败')
-    setMe(await api.me())
-    await Promise.all([refreshModels(), refreshCreativeConfig()])
+    const nextMe = meFromAuthResponse(data) ?? await api.me()
+    setMe(nextMe)
+    void Promise.allSettled([refreshModels(), refreshCreativeConfig()])
     return data
   }, [refreshCreativeConfig, refreshModels])
 
@@ -223,15 +240,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setMe(null)
   }, [refreshCreativeConfig, refreshModels])
 
-  // Keep the current cloud choice stable while authentication and the
-  // authoritative catalog resolve in parallel. Once the catalog answers, it
-  // remains the sole source of cloud models.
   const allowPreviewFallback = !catalogAuthoritative && (!me || loadingModels)
   const cloudImage = imageModels.length || !allowPreviewFallback ? imageModels : FALLBACK_IMAGE
   const resolvedImage = cloudImage.filter((model) => model.slug !== LOCAL_MODEL.slug)
   const resolvedVideo = videoModels.length || !allowPreviewFallback ? videoModels : FALLBACK_VIDEO
   const resolvedText = textModels.length || !allowPreviewFallback ? textModels : [{ slug: 'gpt-4.1-mini', name: 'GPT-4.1 mini', type: 'text', creator: 'OpenAI' }]
-  // Trending = real live models (with form_config) + coming-soon placeholders
   const trending = [
     ...(TRENDING_LIVE_SLUGS.map((slug) =>
       [...resolvedImage, ...resolvedVideo].find((m) => m.slug === slug)

@@ -25,7 +25,7 @@ Windows 上生成的 `.next/standalone` 含 Windows 原生依赖，不能上传�
 先在本地核对发布包输出的 SHA-256，再上传到服务器。以下文件名以当前版本为例，实际以发布包为准：
 
 ```bash
-sha256sum /tmp/cinlan-studio-0.2.5-linux-source-20260811.tar.gz
+sha256sum /tmp/cinlan-studio-0.2.6-linux-source-20260813.tar.gz
 ```
 
 创建系统用户和目录：
@@ -38,7 +38,7 @@ sudo install -d -o cinlan -g cinlan /opt/cinlan-studio /var/lib/cinlan-studio/as
 首次安装源码包：
 
 ```bash
-sudo -u cinlan tar -xzf /tmp/cinlan-studio-0.2.5-linux-source-20260811.tar.gz \
+sudo -u cinlan tar -xzf /tmp/cinlan-studio-0.2.6-linux-source-20260813.tar.gz \
   --strip-components=1 -C /opt/cinlan-studio
 cd /opt/cinlan-studio
 sudo -u cinlan npm ci
@@ -78,10 +78,6 @@ CINLAN_ALLOW_API_KEY_LOGIN=false
 CINLAN_STUDIO_INSTALLATION_ID=cinlan-studio-production
 CREATIVE_ASSET_STORAGE_DIR=/var/lib/cinlan-studio/assets
 CREATIVE_IN_PROCESS_WORKER=false
-ALIBABA_CLOUD_ACCESS_KEY_ID=
-ALIBABA_CLOUD_ACCESS_KEY_SECRET=
-ALIBABA_CLOUD_REGION_ID=cn-shanghai
-ALIBABA_CLOUD_IMAGESEG_ENDPOINT=imageseg.cn-shanghai.aliyuncs.com
 PGSSLMODE=disable
 ```
 
@@ -89,15 +85,9 @@ PGSSLMODE=disable
 
 账号登录、2FA 和嵌入 SSO 是生产默认入口。只有明确设置 `CINLAN_ALLOW_API_KEY_LOGIN=true` 才显示手动 Key 登录。Web 与独立 Worker 必须加载相同的 `DATABASE_URL`、`CINLAN_SESSION_SECRET` 和 `CINLAN_STUDIO_INSTALLATION_ID`。
 
-“透明底 PNG”会在浏览器中识别已经存在的 alpha，或移除画进图片里的棋盘格/简单背景，完整保留标题、按钮和其他美术元素；该流程不调用第三方服务，也不需要阿里云 AccessKey。
-
-只有需要对复杂照片执行“主体分割”时，才配置 Alibaba Cloud VIAPI `SegmentCommonImage`。AccessKey 只能保存在 `/etc/cinlan-studio.env`，Web 与独立 Worker 必须加载同一环境文件。未配置时，棋盘格透明 PNG 仍可正常使用，复杂照片主体分割不可用。
-
-启用阿里云后，界面只显示当日剩余次数，不显示账户余额或内部余额阈值。余额接口不可用时使用保守的每日 5 次限制。
-
 不要把 `/etc/cinlan-studio.env` 复制回源码目录或发布包。
 
-`CREATIVE_ASSET_STORAGE_DIR` 必须允许 Web service 用户写入。`0.2.5` 会在该目录下自动创建 `.thumbnails`，其中只保存可重建的 WebP 预览缓存；原图仍保存在原有 `reference/`、`result/` 等目录中。
+`CREATIVE_ASSET_STORAGE_DIR` 必须允许 Web service 用户写入。`0.2.6` 会在该目录下自动创建 `.thumbnails`，其中只保存可重建的 WebP 预览缓存；原图仍保存在原有 `reference/`、`result/` 等目录中。
 
 ## 4. 数据库迁移
 
@@ -123,6 +113,8 @@ sudo -u cinlan bash -lc '
   psql "$DATABASE_URL" -c "SELECT name, applied_at FROM schema_migrations ORDER BY name"
 '
 ```
+
+结果必须包含 `001_creative_core.sql` 和 `003_studio_credential_broker.sql`。缺少 `003_studio_credential_broker.sql` 时账号仍可登录，但模型目录和生成会明确返回 `CREATIVE_SCHEMA_OUTDATED`，必须完成迁移后再开放服务。
 
 ## 5. 安装 systemd service
 
@@ -210,7 +202,7 @@ referrer-policy: no-referrer
 12. 使用卡片响应的 `ETag` 再次请求并携带 `If-None-Match`，应返回 `304`。
 13. 同时请求同一资产的相同宽度时，`.thumbnails` 中只产生一个完整 WebP 文件且没有残留 `.tmp`。
 14. 文字结果中的 `#`、`##`、列表、表格和代码块按 Markdown 渲染；历史文字详情可滚动，复制结果得到完整原文。
-15. 对带有棋盘格背景的海报下载“透明底 PNG”，标题、按钮和全部美术元素保持不变，棋盘格区域成为真实 alpha；该操作不产生阿里云调用。
+15. 使用 `1600x440`、`1600*440`、`9:16`、`横版`、`竖版` 等提示词时，任务参数和 Provider 请求采用对应尺寸或方向，不回落为固定方图。
 
 ## 8. 更新与回退
 

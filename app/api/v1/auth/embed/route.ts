@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
+import { authErrorResponse } from '@/lib/server/auth-errors'
 import { persistEmbeddedSession } from '@/lib/server/studio-auth'
-import { Sub2ApiError } from '@/lib/server/sub2api'
 
 function configuredOrigins() {
   return (process.env.CINLAN_ALLOWED_ORIGINS || '').split(/\s+/).filter(Boolean)
@@ -17,6 +17,7 @@ function normalizedOrigin(value: unknown) {
 
 export async function POST(request: Request) {
   try {
+    const signal = AbortSignal.timeout(15_000)
     const body = await request.json() as { token?: unknown; user_id?: unknown; src_host?: unknown }
     const token = typeof body.token === 'string' ? body.token.trim() : ''
     const expectedUserId = body.user_id === undefined || body.user_id === null ? '' : String(body.user_id).trim()
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Sub2API 嵌入来源未授权', code: 'EMBED_SOURCE_NOT_ALLOWED' }, { status: 403 })
     }
 
-    const session = await persistEmbeddedSession(token, expectedUserId || undefined)
+    const session = await persistEmbeddedSession(token, expectedUserId || undefined, signal)
     return NextResponse.json({
       connected: true,
       user: {
@@ -43,11 +44,10 @@ export async function POST(request: Request) {
       },
     }, { headers: { 'Cache-Control': 'no-store, max-age=0' } })
   } catch (error) {
-    if (error instanceof Sub2ApiError) {
-      return NextResponse.json({ message: error.message, code: error.code }, { status: error.status })
+    const message = error instanceof Error ? error.message : ''
+    if (/不匹配|mismatch/i.test(message)) {
+      return NextResponse.json({ message, code: 'EMBED_USER_MISMATCH' }, { status: 403 })
     }
-    const message = error instanceof Error ? error.message : 'Sub2API 嵌入登录失败'
-    const status = /令牌不匹配/.test(message) ? 403 : 502
-    return NextResponse.json({ message, code: status === 403 ? 'EMBED_USER_MISMATCH' : 'EMBED_AUTH_FAILED' }, { status })
+    return authErrorResponse(error, 'Sub2API 嵌入登录失败，请稍后重试', 'EMBED_AUTH_FAILED')
   }
 }
