@@ -13,6 +13,8 @@ import type { CloudGeneration, GenStatus } from '@/lib/types'
 import { IconCheck, IconCopy, IconDownload, IconPlay, IconRetry, IconX } from './icons'
 import { MarkdownContent } from './markdown-content'
 
+const HISTORY_PAGE_SIZE = 24
+
 interface HistoryItem {
   id: string
   jobId?: string
@@ -98,17 +100,26 @@ export function HistoryGrid({
   const [removingId, setRemovingId] = useState('')
   const [serverWorkCount, setServerWorkCount] = useState<number | null>(null)
   const [measuredRatios, setMeasuredRatios] = useState<Record<string, number>>({})
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false)
   const loadedOnce = useRef(false)
   const loadSequence = useRef(0)
+  const pageRef = useRef(1)
+  const loadingMoreRef = useRef(false)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
 
   const loadHistory = useCallback(async () => {
     const sequence = ++loadSequence.current
+    const requestedPages = connected ? Math.max(1, pageRef.current) : 1
     if (!loadedOnce.current) setLoading(true)
     try {
-      const [stored, local, cloud] = await Promise.all([
+      const [stored, local, cloudPages] = await Promise.all([
         listStudioHistory(modelType === 'all' ? undefined : modelType),
         listLocalHistory(),
-        connected ? api.generations(modelType === 'all' ? undefined : modelType).catch(() => ({ generations: [], pagination: {} as any })) : Promise.resolve({ generations: [], pagination: {} as any }),
+        connected
+          ? Promise.all(Array.from({ length: requestedPages }, (_, index) => api.generations(modelType === 'all' ? undefined : modelType, index + 1, HISTORY_PAGE_SIZE))).catch(() => [])
+          : Promise.resolve([]),
       ])
       const next: HistoryItem[] = stored.filter((item) => modelType === 'all' || item.type === modelType).map(fromCloud)
       if (modelType === 'image' || modelType === 'video' || modelType === 'all') {
@@ -117,15 +128,24 @@ export function HistoryGrid({
           next.push({ id: item.id, type: 'local', mediaType: 'image', model: t.local.badge, prompt: item.prompt, status: 'COMPLETED', objectUrl: item.objectUrl, createdAt: item.createdAt, aspectRatio: item.width / item.height })
         }
       }
-      for (const item of cloud.generations || []) {
-        for (const output of fromApi(item)) {
-          if (!next.some((entry) => historyKey(entry) === historyKey(output))) next.push(output)
+      for (const cloud of cloudPages) {
+        for (const item of cloud.generations || []) {
+          for (const output of fromApi(item)) {
+            if (!next.some((entry) => historyKey(entry) === historyKey(output))) next.push(output)
+          }
         }
       }
       next.sort((a, b) => b.createdAt - a.createdAt)
       if (sequence === loadSequence.current) {
+        const firstPage = cloudPages[0]
+        const totalPages = Number.isFinite(firstPage?.pagination.totalPages) ? Math.max(1, firstPage.pagination.totalPages) : requestedPages
+        const loadedPage = Math.min(requestedPages, totalPages)
+        const lastPage = cloudPages[loadedPage - 1]
+        pageRef.current = loadedPage
         setItems(next)
-        setServerWorkCount(Number.isFinite(cloud.pagination.workCount) ? cloud.pagination.workCount : null)
+        setHasMore(Boolean(lastPage?.pagination.hasMore))
+        setLoadMoreFailed(false)
+        setServerWorkCount(Number.isFinite(firstPage?.pagination.workCount) ? firstPage.pagination.workCount! : null)
       }
     } finally {
       if (sequence === loadSequence.current) {
@@ -135,7 +155,50 @@ export function HistoryGrid({
     }
   }, [connected, modelType, t.local.badge])
 
+  useEffect(() => {
+    pageRef.current = 1
+    setHasMore(false)
+    setLoadMoreFailed(false)
+  }, [modelType])
+
   useEffect(() => { void loadHistory() }, [loadHistory, refreshToken])
+
+  const loadMore = useCallback(async () => {
+    if (!connected || !hasMore || loadingMoreRef.current) return
+    const sequence = loadSequence.current
+    const nextPage = pageRef.current + 1
+    loadingMoreRef.current = true
+    setLoadingMore(true)
+    setLoadMoreFailed(false)
+    try {
+      const cloud = await api.generations(modelType === 'all' ? undefined : modelType, nextPage, HISTORY_PAGE_SIZE)
+      if (sequence !== loadSequence.current) return
+      const additions = cloud.generations.flatMap(fromApi)
+      setItems((current) => {
+        const merged = new Map(current.map((item) => [historyKey(item), item]))
+        for (const item of additions) merged.set(historyKey(item), item)
+        return Array.from(merged.values()).sort((a, b) => b.createdAt - a.createdAt)
+      })
+      pageRef.current = nextPage
+      setHasMore(Boolean(cloud.pagination.hasMore))
+      if (Number.isFinite(cloud.pagination.workCount)) setServerWorkCount(cloud.pagination.workCount!)
+    } catch {
+      if (sequence === loadSequence.current) setLoadMoreFailed(true)
+    } finally {
+      loadingMoreRef.current = false
+      setLoadingMore(false)
+    }
+  }, [connected, hasMore, modelType])
+
+  useEffect(() => {
+    const target = loadMoreRef.current
+    if (!target || !hasMore || loadingMore || loadMoreFailed || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadMore()
+    })
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [hasMore, loadMore, loadMoreFailed, loadingMore])
 
   const visible = useMemo(() => {
     const merged = new Map(items.map((item) => [historyKey(item), item]))
@@ -286,12 +349,19 @@ export function HistoryGrid({
         {taskItems.length > 0 && <div data-testid="history-task-list" className="mb-5 grid gap-2 md:grid-cols-2">
           {taskItems.map((item) => <HistoryTask key={historyKey(item)} item={item} retrying={retryingId === (item.jobId || item.id)} cancelling={cancellingId === (item.jobId || item.id)} removing={removingId === (item.jobId || item.id)} onRetry={onRetry && item.serverBacked ? () => void retry(item) : undefined} onCancel={onCancel && item.serverBacked && isPending(item.status) ? () => void cancel(item) : undefined} onRemove={!isPending(item.status) ? () => void removeOne(item) : undefined} t={t} />)}
         </div>}
-        {workItems.length > 0 && <div data-testid="history-gallery" className="history-gallery">
-          {workItems.map((item) => {
-            const ratio = measuredRatios[historyKey(item)] ?? displayRatio(item)
-            return <HistoryCard key={historyKey(item)} item={item} ratio={ratio} manage={manage} selected={selected.includes(historyKey(item))} onToggle={() => toggle(historyKey(item))} onOpen={() => setModal(item)} onRatio={(width, height) => rememberRatio(item, width, height)} />
-          })}
-        </div>}
+        {workItems.length > 0 && <>
+          <div data-testid="history-gallery" className="history-gallery">
+            {workItems.map((item) => {
+              const ratio = measuredRatios[historyKey(item)] ?? displayRatio(item)
+              return <HistoryCard key={historyKey(item)} item={item} ratio={ratio} manage={manage} selected={selected.includes(historyKey(item))} onToggle={() => toggle(historyKey(item))} onOpen={() => setModal(item)} onRatio={(width, height) => rememberRatio(item, width, height)} />
+            })}
+          </div>
+          {(hasMore || loadingMore) && <div ref={loadMoreRef} data-testid="history-load-more-sentinel" className="flex justify-center py-6">
+            <button type="button" onClick={() => void loadMore()} disabled={loadingMore} className="rounded-full px-4 py-2 text-xs font-medium text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900 disabled:cursor-wait disabled:opacity-70 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white">
+              {loadingMore ? t.history.loadingMore : loadMoreFailed ? t.history.loadMoreFailed : t.history.loadMore}
+            </button>
+          </div>}
+        </>}
       </>}
       {modal && <MediaModal item={modal} copied={copied} onClose={() => { setModal(null); setCopied(false) }} onCopy={async () => { const value = modal.mediaType === 'text' ? modal.textResult || modal.prompt : modal.prompt; if (!value) return; if (!await copyToClipboard(value)) return; setCopied(true); setTimeout(() => setCopied(false), 1500) }} onContinueEdit={onContinueEdit && modal.serverBacked && !isPending(modal.status) && modal.mediaType === 'image' && (modal.objectUrl || modal.result_url) ? () => { onContinueEdit({ jobId: modal.jobId || modal.id, resultUrl: modal.objectUrl || modal.result_url! }); setModal(null) } : undefined} t={t} />}
     </section>

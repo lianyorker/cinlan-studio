@@ -310,6 +310,18 @@ async function runBrowserSmoke(appUrl, upstreamRequests) {
       window.fetch = async (input, init) => {
         const url = new URL(typeof input === 'string' ? input : input.url, location.href);
         const method = (init?.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase();
+        if (localStorage.getItem('__cinlan_history_pagination_smoke') === '1' && url.pathname === '/api/v1/generations' && method === 'GET') {
+          const page = Number(url.searchParams.get('page') || '1');
+          window.__cinlanHistoryPages = [...(window.__cinlanHistoryPages || []), page];
+          const count = page === 1 ? 24 : page === 2 ? 7 : 0;
+          const offset = page === 1 ? 0 : 24;
+          const generations = Array.from({ length: count }, (_, index) => ({
+            id: 'job_history_pagination_' + (offset + index), type: 'image', model: 'mock-sync-image', prompt: 'history pagination ' + (offset + index),
+            status: 'COMPLETED', result_url: 'data:image/png;base64,${PNG}', result_urls: ['data:image/png;base64,${PNG}'], expected_count: 1,
+            thumbnail_url: null, credits_used: 0, created_at: new Date(Date.now() - (offset + index) * 1000).toISOString(), error: null,
+          }));
+          return json({ generations, pagination: { page, pageSize: 24, totalCount: 31, workCount: 31, totalPages: 2, hasMore: page === 1 } });
+        }
         if (localStorage.getItem('__cinlan_terminal_smoke') === '1') {
           const now = new Date().toISOString();
           const failedJob = {
@@ -518,6 +530,51 @@ async function runBrowserSmoke(appUrl, upstreamRequests) {
 
     await selectModel(client, 'Mock Async Image', 'Mock Sync Image', 'Z-Image Turbo')
     assert.equal(await client.evaluate(`localStorage.getItem('cinlan-model-image')`), 'mock-sync-image')
+
+    await client.evaluate(`(() => {
+      localStorage.setItem('__cinlan_history_pagination_smoke', '1');
+      localStorage.setItem('locale', 'en');
+      window.__cinlanHistoryPages = [];
+      location.reload();
+      return true;
+    })()`)
+    await waitForEvaluation(client, `document.readyState === 'complete' && document.body.innerText.includes('Mock Sync Image')`, 30_000)
+    await click(client, `item.getAttribute('aria-label') === 'History'`)
+    await waitForEvaluation(client, `(() => {
+      const gallery = [...document.querySelectorAll('[data-testid="history-gallery"]')].find((item) => item.offsetParent !== null);
+      return gallery?.querySelectorAll('[data-history-key^="cloud:job_history_pagination_"]').length === 24;
+    })()`, 20_000)
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500))
+    assert.equal(await client.evaluate(`(window.__cinlanHistoryPages || []).includes(2)`), false, 'History requested page 2 before the user reached the end')
+    const historyScrolled = await client.evaluate(`(() => {
+      const gallery = [...document.querySelectorAll('[data-testid="history-gallery"]')].find((item) => item.offsetParent !== null);
+      if (!gallery) return false;
+      let scroller = gallery.parentElement;
+      while (scroller && scroller !== document.body && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+      if (!scroller || scroller === document.body) return false;
+      scroller.scrollTop = scroller.scrollHeight;
+      scroller.dispatchEvent(new Event('scroll'));
+      return true;
+    })()`)
+    assert.equal(historyScrolled, true, 'Scrollable history container was not found')
+    await waitForEvaluation(client, `(window.__cinlanHistoryPages || []).includes(2)`, 20_000)
+    await waitForEvaluation(client, `(() => {
+      const gallery = [...document.querySelectorAll('[data-testid="history-gallery"]')].find((item) => item.offsetParent !== null);
+      return gallery?.querySelectorAll('[data-history-key^="cloud:job_history_pagination_"]').length === 31;
+    })()`, 20_000)
+    const paginatedHistory = await client.evaluate(`(() => {
+      const gallery = [...document.querySelectorAll('[data-testid="history-gallery"]')].find((item) => item.offsetParent !== null);
+      const keys = [...(gallery?.querySelectorAll('[data-history-key^="cloud:job_history_pagination_"]') || [])].map((item) => item.getAttribute('data-history-key'));
+      return { count: keys.length, unique: new Set(keys).size, pageTwoRequests: (window.__cinlanHistoryPages || []).filter((page) => page === 2).length };
+    })()`)
+    assert.deepEqual(paginatedHistory, { count: 31, unique: 31, pageTwoRequests: 1 }, 'History pagination did not append one unique second page')
+    await client.evaluate(`(() => {
+      localStorage.removeItem('__cinlan_history_pagination_smoke');
+      localStorage.setItem('locale', 'zh');
+      location.reload();
+      return true;
+    })()`)
+    await waitForEvaluation(client, `document.readyState === 'complete' && document.body.innerText.includes('Mock Sync Image')`, 30_000)
 
     await client.evaluate(`(() => { localStorage.setItem('__cinlan_restore_smoke', '1'); location.reload(); return true })()`)
     await waitForEvaluation(client, `document.querySelector('[data-testid="creative-activity"]') !== null`, 20_000)
