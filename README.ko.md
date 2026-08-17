@@ -1,6 +1,6 @@
 # Cinlan Studio
 
-Cinlan Studio는 이미지 생성, 이미지 편집, 구조화된 텍스트 생성, 영구적인 제작 기록을 제공하는 AI 제작 워크스페이스입니다. `0.2.6`는 Next.js BFF, PostgreSQL Creative Core, 독립 Worker로 구성됩니다.
+Cinlan Studio는 이미지 생성, 이미지 편집, 구조화된 텍스트 생성, 영구적인 제작 기록을 제공하는 AI 제작 워크스페이스입니다. `0.2.7`는 Next.js BFF, PostgreSQL Creative Core, 독립 Worker로 구성됩니다.
 
 [English](./README.md) | [简体中文](./README.zh.md) | [日本語](./README.ja.md) | **한국어**
 

@@ -1,6 +1,6 @@
 # Cinlan Studio
 
-Cinlan Studio is Cinlan's AI creation workspace for image generation, image editing, structured text generation, and durable creative history. Version `0.2.6` uses a same-origin Next.js BFF, PostgreSQL Creative Core, and an independent worker so long-running jobs can survive refreshes and process restarts.
+Cinlan Studio is Cinlan's AI creation workspace for image generation, image editing, structured text generation, and durable creative history. Version `0.2.7` uses a same-origin Next.js BFF, PostgreSQL Creative Core, and an independent worker so long-running jobs can survive refreshes and process restarts.
 
 **English** | [简体中文](./README.zh.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Deployment](./deploy/DEPLOY.md)
 
@@ -11,6 +11,7 @@ Cinlan Studio is Cinlan's AI creation workspace for image generation, image edit
 - Capability-driven model, quality, output count, aspect ratio, and creative planning controls.
 - Markdown and GFM rendering for text results, including headings, lists, tables, links, and code blocks.
 - Scrollable text history with reliable result copying in normal pages and embedded Sub2API pages.
+- Paginated creative history that automatically loads additional work as the user scrolls, with deduplication and retry fallback.
 - Owner-isolated image assets, streamed originals, cached WebP thumbnails, ETag support, and private browser caching.
 - Prompt size parsing for ratios, named orientations, and explicit dimensions such as `1600x440`.
 - Sub2API account login, 2FA, embedded SSO, and server-managed per-owner/per-group credentials. Provider keys are never exposed to the browser.

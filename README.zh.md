@@ -1,6 +1,6 @@
 # Cinlan Studio（星澜绘坊）
 
-Cinlan Studio 是 Cinlan 的 AI 创作工作台，覆盖图片生成、图片编辑、结构化文字生成和可恢复的创作历史。`0.2.6` 使用 Next.js 同源 BFF、PostgreSQL Creative Core 与独立 Worker，使长时间任务在刷新页面或进程重启后仍可恢复。
+Cinlan Studio 是 Cinlan 的 AI 创作工作台，覆盖图片生成、图片编辑、结构化文字生成和可恢复的创作历史。`0.2.7` 使用 Next.js 同源 BFF、PostgreSQL Creative Core 与独立 Worker，使长时间任务在刷新页面或进程重启后仍可恢复。
 
 [English](./README.md) | **简体中文** | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [部署手册](./deploy/DEPLOY.md)
 
@@ -11,6 +11,7 @@ Cinlan Studio 是 Cinlan 的 AI 创作工作台，覆盖图片生成、图片编
 - 模型能力驱动的质量、张数、比例和创作分析强度控制。
 - 文字结果支持 Markdown 与 GFM，正确展示标题、列表、表格、链接和代码块。
 - 历史文字详情可独立滚动，并能在普通页面和 Sub2API 嵌入页面可靠复制结果。
+- 创作历史支持滚动分页加载、结果去重和失败重试，不再只显示首批 24 条作品。
 - Owner 隔离的图片资产、原图流式传输、WebP 缩略图缓存、ETag 和私有浏览器缓存。
 - 支持从提示词解析比例、横竖版方向，以及 `1600x440` 这类明确像素尺寸。
 - Sub2API 账号登录、2FA、嵌入 SSO，以及服务端按 owner/group 管理的内部凭据；浏览器不会获得 provider key。
