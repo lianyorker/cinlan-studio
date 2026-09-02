@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useI18n } from '@/lib/i18n'
 import type { Dict } from '@/lib/i18n/en'
 import { useStudio } from '@/lib/studio'
-import { api, thumbUrl } from '@/lib/api'
+import { api, mediaUrl, thumbUrl } from '@/lib/api'
 import { deleteLocalGeneration, listLocalHistory } from '@/lib/local/history'
 import { deleteStudioHistory, listStudioHistory, type StudioHistoryRecord } from '@/lib/local/studio-history'
 import { copyToClipboard } from '@/lib/clipboard'
@@ -24,6 +24,7 @@ interface HistoryItem {
   prompt: string | null
   status: GenStatus
   result_url?: string | null
+  thumbnail_url?: string | null
   objectUrl?: string
   textResult?: string
   createdAt: number
@@ -33,7 +34,7 @@ interface HistoryItem {
 }
 
 function fromCloud(record: StudioHistoryRecord): HistoryItem {
-  return { id: record.id, type: 'cloud', mediaType: record.type, model: record.model, prompt: record.prompt, status: record.status, result_url: record.resultUrl, textResult: record.textResult, createdAt: record.createdAt, error: record.error }
+  return { id: record.id, type: 'cloud', mediaType: record.type, model: record.model, prompt: record.prompt, status: record.status, result_url: record.resultUrl, thumbnail_url: null, textResult: record.textResult, createdAt: record.createdAt, error: record.error }
 }
 
 function fromApi(record: CloudGeneration): HistoryItem[] {
@@ -46,11 +47,12 @@ function fromApi(record: CloudGeneration): HistoryItem[] {
     id: serverBacked ? `${record.id}:output:${index}` : record.id,
     jobId: serverBacked ? record.id : undefined,
     type: 'cloud',
-    mediaType: record.type === 'video' ? 'video' : 'image',
+    mediaType: record.type === 'video' ? 'video' : record.type === 'text' ? 'text' : 'image',
     model: record.model,
     prompt: record.prompt,
     status: !resultUrls[index] && record.status === 'COMPLETED' ? 'FAILED' : record.status,
     result_url: resultUrls[index] || null,
+    thumbnail_url: record.thumbnail_url || null,
     createdAt: new Date(record.created_at).getTime(),
     error: record.error || undefined,
     serverBacked,
@@ -389,6 +391,7 @@ function HistoryTask({ item, retrying, cancelling, removing, onRetry, onCancel, 
 
 function HistoryCard({ item, ratio, manage, selected, onToggle, onOpen, onRatio }: { item: HistoryItem; ratio: number; manage: boolean; selected: boolean; onToggle: () => void; onOpen: () => void; onRatio: (width: number, height: number) => void }) {
   const image = item.objectUrl || item.result_url || ''
+  const thumbnail = item.objectUrl || item.thumbnail_url || item.result_url || ''
   const style = {
     '--history-ratio': ratio,
     '--history-basis-mobile': `${ratio * 176}px`,
@@ -398,7 +401,7 @@ function HistoryCard({ item, ratio, manage, selected, onToggle, onOpen, onRatio 
   } as CSSProperties
   return <div data-history-key={historyKey(item)} style={style} className={`history-gallery-item group relative overflow-hidden rounded-lg bg-neutral-100 text-left dark:bg-neutral-900 ${selected ? 'ring-2 ring-neutral-900 ring-offset-2 dark:ring-white dark:ring-offset-neutral-950' : ''}`}>
     <button type="button" onClick={manage ? onToggle : onOpen} className="absolute inset-0 h-full w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-500">
-      {item.mediaType === 'text' ? <div className="h-full overflow-hidden bg-[#f1eee7] p-4 text-sm leading-6 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"><div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-400">{item.model}</div>{item.textResult || item.prompt}</div> : image ? <img src={item.objectUrl ? image : thumbUrl(image, 480)} alt="" loading="lazy" decoding="async" width={480} height={480} onLoad={(event) => onRatio(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)} className="h-full w-full object-cover" /> : null}
+      {item.mediaType === 'text' ? <div className="h-full overflow-hidden bg-[#f1eee7] p-4 text-sm leading-6 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"><div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-400">{item.model}</div>{item.textResult || item.prompt}</div> : item.mediaType === 'video' ? image ? <video src={mediaUrl(image)} poster={thumbnail && thumbnail !== image ? mediaUrl(thumbnail) : undefined} muted playsInline preload="metadata" onLoadedMetadata={(event) => { const video = event.currentTarget; if (video.videoWidth && video.videoHeight) onRatio(video.videoWidth, video.videoHeight) }} className="h-full w-full object-cover" /> : null : image ? <img src={item.objectUrl ? image : thumbUrl(image, 480)} alt="" loading="lazy" decoding="async" width={480} height={480} onLoad={(event) => onRatio(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)} className="h-full w-full object-cover" /> : null}
       {item.mediaType === 'video' && image && <span className="absolute inset-0 grid place-items-center bg-black/10"><span className="grid h-10 w-10 place-items-center rounded-full bg-white/90"><IconPlay className="h-4 w-4 text-neutral-900" /></span></span>}
       {!manage && <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-3 pb-3 pt-10 text-[11px] text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{item.prompt || item.model}</span>}
     </button>

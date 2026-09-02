@@ -8,6 +8,7 @@ import { createCreativeJob, creativeJobDto, getAssetForOwner, getJobForOwner, jo
 import { scheduleCreativeDrain } from './worker'
 import { resolveModelCapabilities } from './capabilities'
 import { resolveStudioCredential } from './provider-credentials'
+import { normalizeGptImageSize } from './provider'
 
 type ParsedSubmission = {
   input: Record<string, unknown>
@@ -55,30 +56,39 @@ async function inputAssets(ownerId: string, parsed: ParsedSubmission) {
   return assets
 }
 
-function normalizedParameters(input: Record<string, unknown>, capability: ModelCapabilities, prompt: string) {
+function normalizedParameters(input: Record<string, unknown>, capability: ModelCapabilities, prompt: string, model: string) {
   const requestedCount = Number(input.count ?? input.n ?? 1)
   if (!Number.isInteger(requestedCount) || requestedCount < 1) throw new CreativeCoreError(400, 'INVALID_OUTPUT_COUNT', 'Output count must be a positive integer')
   const count = Math.min(capability.max_outputs, Math.min(4, requestedCount))
   const promptSize = imageSizeIntentFromPrompt(prompt, capability.aspect_ratios)
-  const explicitSize = typeof input.size === 'string' ? /^(\d{2,5})x(\d{2,5})$/i.exec(input.size.trim()) : null
+  const explicitSize = typeof input.size === 'string' ? /^(\d{2,6})\s*[xX×*]\s*(\d{2,6})$/.exec(input.size.trim()) : null
   const explicitAspectRatio = explicitSize ? normalizeImageAspectRatio(`${explicitSize[1]}:${explicitSize[2]}`) : undefined
   const aspectRatio = String(input.aspect_ratio ?? input.aspectRatio ?? promptSize?.aspectRatio ?? explicitAspectRatio ?? '')
   const quality = String(input.quality ?? capability.qualities[capability.qualities.length - 1] ?? '')
   const resolution = String(input.resolution ?? capability.resolutions[capability.resolutions.length - 1] ?? '')
   const analysisMode: CreativeAnalysisMode = input.analysis_mode === 'standard' ? 'standard' : 'deep'
-  if (aspectRatio && !capability.aspect_ratios.includes(aspectRatio) && aspectRatio !== promptSize?.aspectRatio) {
+  const gptFlexibleSize = /^gpt-image-/i.test(model)
+  if (aspectRatio && !capability.aspect_ratios.includes(aspectRatio) && aspectRatio !== promptSize?.aspectRatio && !(gptFlexibleSize && explicitSize)) {
     throw new CreativeCoreError(400, 'INVALID_ASPECT_RATIO', 'Selected model does not support this aspect ratio')
   }
   if (quality && !capability.qualities.includes(quality)) throw new CreativeCoreError(400, 'INVALID_IMAGE_QUALITY', 'Selected model does not support this quality')
-  if (resolution && !capability.resolutions.includes(resolution.toUpperCase())) throw new CreativeCoreError(400, 'INVALID_IMAGE_RESOLUTION', 'Selected model does not support this resolution')
+  const normalizedResolution = resolution.toUpperCase()
+  if (resolution && !capability.resolutions.includes(normalizedResolution) && !(gptFlexibleSize && ['1K', '2K', '4K'].includes(normalizedResolution))) throw new CreativeCoreError(400, 'INVALID_IMAGE_RESOLUTION', 'Selected model does not support this resolution')
   const requestedPromptSize = promptSize?.source === 'dimensions' ? promptSize : undefined
+  const requestedSize = explicitSize
+    ? { width: Number(explicitSize[1]), height: Number(explicitSize[2]) }
+    : requestedPromptSize
+  const normalizedSize = gptFlexibleSize
+    ? normalizeGptImageSize(input.size, aspectRatio, normalizedResolution || '1K', requestedSize)
+    : (typeof input.size === 'string' && input.size.trim() ? input.size.trim() : undefined)
   return {
     count,
     aspect_ratio: aspectRatio || undefined,
     requested_width: explicitSize ? Number(explicitSize[1]) : requestedPromptSize?.width,
     requested_height: explicitSize ? Number(explicitSize[2]) : requestedPromptSize?.height,
     quality: quality || undefined,
-    resolution: resolution ? resolution.toUpperCase() : undefined,
+    resolution: normalizedResolution || undefined,
+    size: normalizedSize,
     analysis_mode: analysisMode,
     background: input.background || undefined,
     output_format: input.output_format || undefined,
@@ -107,7 +117,7 @@ export async function submitCreativeImageJob(request: Request) {
     const mask = await storeCreativeAsset({ ownerId: owner.id, kind: 'mask', bytes: new Uint8Array(await parsed.maskFile.arrayBuffer()), mime: parsed.maskFile.type, originalName: parsed.maskFile.name })
     maskAssetId = mask.id
   }
-  const parameters: Record<string, unknown> = normalizedParameters(parsed.input, capability, prompt)
+  const parameters: Record<string, unknown> = normalizedParameters(parsed.input, capability, prompt, model)
   parameters.provider_credential_id = providerCredential.id || undefined
   parameters.provider_group_id = providerCredential.groupId || undefined
   parameters.provider_credential_rotation = providerCredential.rotationVersion

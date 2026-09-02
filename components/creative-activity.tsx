@@ -9,6 +9,12 @@ import { IconChevronDown, IconX } from './icons'
 
 const TERMINAL = new Set<GenStatus>(['COMPLETED', 'PARTIAL_SUCCESS', 'CANCELLED', 'FAILED', 'EXPIRED'])
 
+function mergeEvents(current: CreativeEvent[], incoming: CreativeEvent[]) {
+  const merged = new Map<number, CreativeEvent>()
+  for (const event of [...current, ...incoming]) merged.set(event.id, event)
+  return [...merged.values()].sort((left, right) => left.id - right.id)
+}
+
 export function CreativeActivity({
   jobId,
   status,
@@ -28,7 +34,7 @@ export function CreativeActivity({
     let alive = true
     setEvents([])
     void api.creativeEvents(jobId).then(({ events: initial }) => {
-      if (alive) setEvents(initial)
+      if (alive) setEvents((current) => mergeEvents(current, initial))
     }).catch(() => {})
     if (terminal) return () => { alive = false }
     const source = new EventSource(creativeEventStreamUrl(jobId))
@@ -36,7 +42,7 @@ export function CreativeActivity({
       try {
         const event = JSON.parse((message as MessageEvent).data) as CreativeEvent
         if (!alive) return
-        setEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event])
+        setEvents((current) => mergeEvents(current, [event]))
       } catch {}
     })
     return () => {

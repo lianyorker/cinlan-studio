@@ -1,4 +1,4 @@
-import { mediaTaskDetails, resultError, resultUrls } from '../generation'
+import { mediaTaskDetails, providerTaskId, resultError, resultUrls } from '../generation'
 import { newRequestId, Sub2ApiError, sub2apiFetch } from '../sub2api'
 
 export interface ProviderReference {
@@ -8,18 +8,117 @@ export interface ProviderReference {
   role: 'input' | 'mask'
 }
 
-const RESOLUTION_MAX_EDGE: Record<string, number> = { '1K': 1024, '2K': 2048, '4K': 3840 }
+type ImageDimensions = { width: number; height: number }
 
-export function sizeForResolution(aspectRatio: string, resolution: string, requested?: { width: number; height: number }) {
-  if (requested?.width && requested.height) return `${requested.width}x${requested.height}`
-  const maxEdge = RESOLUTION_MAX_EDGE[resolution.toUpperCase()]
-  const parts = aspectRatio.split(':').map(Number)
-  if (!maxEdge || parts.length !== 2 || !parts.every((value) => Number.isFinite(value) && value > 0)) return undefined
-  const [ratioWidth, ratioHeight] = parts
-  const round = (value: number) => Math.max(8, Math.round(value / 8) * 8)
-  return ratioWidth >= ratioHeight
-    ? `${maxEdge}x${round(maxEdge * ratioHeight / ratioWidth)}`
-    : `${round(maxEdge * ratioWidth / ratioHeight)}x${maxEdge}`
+// GPT Image 2 accepts flexible dimensions, but the generated canvas still has
+// hard pixel/grid limits. These canonical canvases avoid values such as
+// 1024x680 (not a valid 16px grid) when translating an aspect ratio.
+const GPT_IMAGE_SIZE_TABLE: Record<string, Record<string, string>> = {
+  '1:1': { '1K': '1024x1024', '2K': '2048x2048', '4K': '2880x2880' },
+  '3:2': { '1K': '1536x1024', '2K': '2400x1600', '4K': '3456x2304' },
+  '2:3': { '1K': '1024x1536', '2K': '1600x2400', '4K': '2304x3456' },
+  '4:3': { '1K': '1152x864', '2K': '2048x1536', '4K': '3264x2448' },
+  '3:4': { '1K': '864x1152', '2K': '1536x2048', '4K': '2448x3264' },
+  '5:4': { '1K': '1120x896', '2K': '2240x1792', '4K': '3200x2560' },
+  '4:5': { '1K': '896x1120', '2K': '1792x2240', '4K': '2560x3200' },
+  '16:9': { '1K': '1280x720', '2K': '2048x1152', '4K': '3840x2160' },
+  '9:16': { '1K': '720x1280', '2K': '1152x2048', '4K': '2160x3840' },
+  '21:9': { '1K': '1344x576', '2K': '2016x864', '4K': '3808x1632' },
+  '3:1': { '1K': '1536x512', '2K': '2400x800', '4K': '3840x1280' },
+  '1:3': { '1K': '512x1536', '2K': '800x2400', '4K': '1280x3840' },
+}
+const GPT_IMAGE_SIZE_RATIOS = Object.keys(GPT_IMAGE_SIZE_TABLE)
+const GPT_IMAGE_MIN_PIXELS = 655_360
+const GPT_IMAGE_MAX_PIXELS = 8_294_400
+const GPT_IMAGE_MAX_EDGE = 3840
+// Some OpenAI-compatible Sub2API groups expose a smaller, finite canvas
+// catalogue than the GPT Image API. This is the safest common fallback.
+export const GPT_IMAGE_PROVIDER_SAFE_SIZE = '1024x1024'
+
+export function isGptImageSizeValidationError(error: unknown) {
+  if (!(error instanceof Sub2ApiError)) return false
+  const text = `${error.code || ''} ${error.message}`
+  return /size\s+must\s+be\s+a\s+width\s*[x×]?\s*height\s+string/i.test(text)
+    || /\$?width\s+must\s+be\s+one\s+of\b/i.test(text)
+    || /\$?height\s+must\s+be\s+one\s+of\b/i.test(text)
+    || /invalid\s+(?:image\s+)?size\b/i.test(text)
+}
+
+function parseImageDimensions(value: unknown): ImageDimensions | undefined {
+  const match = /^([0-9]{1,6})[ \t]*[xX×*][ \t]*([0-9]{1,6})$/.exec(String(value ?? '').trim())
+  if (!match) return undefined
+  const width = Number(match[1])
+  const height = Number(match[2])
+  return Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0
+    ? { width, height }
+    : undefined
+}
+
+function formatImageDimensions(dimensions: ImageDimensions) {
+  return String(dimensions.width) + 'x' + String(dimensions.height)
+}
+
+export function isValidGptImageSize(value: unknown): value is string {
+  const dimensions = parseImageDimensions(value)
+  if (!dimensions) return false
+  const { width, height } = dimensions
+  const pixels = width * height
+  const longEdge = Math.max(width, height)
+  const shortEdge = Math.min(width, height)
+  return width % 16 === 0
+    && height % 16 === 0
+    && longEdge <= GPT_IMAGE_MAX_EDGE
+    && pixels >= GPT_IMAGE_MIN_PIXELS
+    && pixels <= GPT_IMAGE_MAX_PIXELS
+    && longEdge <= shortEdge * 3
+}
+
+function aspectRatioValue(value: string) {
+  const match = /^([0-9]+(?:\.[0-9]+)?)[ \t]*[:：][ \t]*([0-9]+(?:\.[0-9]+)?)$/.exec(value.trim())
+  if (!match) return undefined
+  const width = Number(match[1])
+  const height = Number(match[2])
+  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? width / height : undefined
+}
+
+function nearestRatioKey(value: number) {
+  let closest = '1:1'
+  let distance = Number.POSITIVE_INFINITY
+  for (const candidate of GPT_IMAGE_SIZE_RATIOS) {
+    const candidateValue = aspectRatioValue(candidate)
+    if (!candidateValue) continue
+    const nextDistance = Math.abs(Math.log(value / candidateValue))
+    if (nextDistance < distance) {
+      closest = candidate
+      distance = nextDistance
+    }
+  }
+  return closest
+}
+
+function resolutionKey(value: string) {
+  const normalized = value.trim().toUpperCase()
+  return normalized === '2K' || normalized === '4K' ? normalized : '1K'
+}
+
+/** Return a provider-safe GPT Image canvas for an aspect ratio/resolution. */
+export function sizeForResolution(aspectRatio: string, resolution: string, requested?: ImageDimensions) {
+  if (requested && isValidGptImageSize(formatImageDimensions(requested))) return formatImageDimensions(requested)
+  const requestedRatio = requested && requested.width > 0 && requested.height > 0
+    ? requested.width / requested.height
+    : undefined
+  const ratio = requestedRatio ?? aspectRatioValue(aspectRatio) ?? 1
+  return GPT_IMAGE_SIZE_TABLE[nearestRatioKey(ratio)]?.[resolutionKey(resolution)] ?? GPT_IMAGE_SIZE_TABLE['1:1']['1K']
+}
+
+/** Normalize a user/provider size while preserving valid custom dimensions. */
+export function normalizeGptImageSize(value: unknown, aspectRatio: string, resolution: string, requested?: ImageDimensions) {
+  const explicit = parseImageDimensions(value)
+  if (explicit && isValidGptImageSize(formatImageDimensions(explicit))) return formatImageDimensions(explicit)
+  // Preserve the shape of an invalid explicit size while translating it to the
+  // nearest provider-safe canvas; never let a malformed custom size fall back
+  // to an unrelated square canvas.
+  return sizeForResolution(aspectRatio, resolution, requested ?? explicit)
 }
 
 function legacyEditPrompt(prompt: string, referenceCount: number, transparentBackground: boolean) {
@@ -78,8 +177,11 @@ export function transparentBackgroundUnsupported(error: unknown) {
 }
 
 export function shouldFallbackToSynchronousImageEndpoint(error: unknown) {
-  return (error instanceof Sub2ApiError && [404, 405, 501, 502, 503, 504].includes(error.status))
-    || (error instanceof DOMException && error.name === 'TimeoutError')
+  if (!(error instanceof Sub2ApiError)) return false
+  if ([404, 405, 501].includes(error.status)) return true
+  const code = String(error.code ?? '').toLowerCase()
+  return /async.*(?:disabled|unsupported|not.?found)/.test(code)
+    || /async image (?:tasks? )?(?:are )?(?:disabled|unsupported)|async image storage disabled/i.test(error.message)
 }
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number) {
@@ -104,7 +206,7 @@ export async function requestProviderImage(input: {
     const requestedWidth = Number(parameters.requested_width || 0)
     const requestedHeight = Number(parameters.requested_height || 0)
     const requested = requestedWidth > 0 && requestedHeight > 0 ? { width: requestedWidth, height: requestedHeight } : undefined
-    if (!parameters.size) parameters.size = aspectRatio ? sizeForResolution(aspectRatio, resolution || '1K', requested) : 'auto'
+    parameters.size = normalizeGptImageSize(parameters.size, aspectRatio, resolution || '1K', requested)
     const outputFormat = String(parameters.output_format || '').toLowerCase()
     const background = String(parameters.background || '').toLowerCase()
     if (!outputFormat && background === 'transparent') parameters.output_format = 'png'
@@ -156,16 +258,25 @@ export async function requestProviderImage(input: {
     }
   }
 
+  async function sendWithSizeCompatibility(requestPrompt: string, idempotencyKey: string) {
+    try {
+      return await send(parameters, requestPrompt, idempotencyKey)
+    } catch (error) {
+      if (!isGptImageSizeValidationError(error) || parameters.size === GPT_IMAGE_PROVIDER_SAFE_SIZE) throw error
+      const fallbackParameters = { ...parameters, size: GPT_IMAGE_PROVIDER_SAFE_SIZE }
+      return send(fallbackParameters, requestPrompt, idempotencyKey)
+    }
+  }
+
   let payload: unknown
   try {
-    payload = await send(parameters, input.prompt, input.idempotencyKey)
+    payload = await sendWithSizeCompatibility(input.prompt, input.idempotencyKey)
   } catch (error) {
     if (!retryableGroupError(error)) throw error
     await new Promise((resolve) => setTimeout(resolve, 800))
-    payload = await send(parameters, input.prompt, input.idempotencyKey)
+    payload = await sendWithSizeCompatibility(input.prompt, input.idempotencyKey)
   }
-  const value = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
-  const id = String(value.id ?? value.task_id ?? value.request_id ?? '')
+  const id = providerTaskId(payload)
   const urls = resultUrls(payload)
   if (urls.length) return { ...mediaTaskDetails(payload, id || newRequestId('image'), 'image'), status: 'COMPLETED' as const, result_urls: urls }
   if (id) return { ...mediaTaskDetails(payload, id, 'image'), status: 'IN_PROGRESS' as const, result_urls: [] }

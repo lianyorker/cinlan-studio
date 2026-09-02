@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
 import { imageSizeIntentFromPrompt } from '@/lib/image-aspect-ratio'
-import { requireGenerationSession, canonicalBody, mediaTaskDetails, resultError, resultUrl } from '@/lib/server/generation'
+import { requireGenerationSession, canonicalBody, mediaTaskDetails, providerTaskId, resultError, resultUrls } from '@/lib/server/generation'
 import { newRequestId, Sub2ApiError, sub2apiFetch } from '@/lib/server/sub2api'
 import { creativeCoreConfigured } from '@/lib/server/creative/config'
 import { creativeTaskContract } from '@/lib/server/creative/contracts'
 import { creativeErrorResponse } from '@/lib/server/creative/http'
 import { submitCreativeImageJob } from '@/lib/server/creative/submission'
-import { shouldFallbackToSynchronousImageEndpoint, sizeForResolution } from '@/lib/server/creative/provider'
+import { GPT_IMAGE_PROVIDER_SAFE_SIZE, isGptImageSizeValidationError, normalizeGptImageSize, shouldFallbackToSynchronousImageEndpoint } from '@/lib/server/creative/provider'
 import { CreativeCoreError } from '@/lib/server/creative/errors'
 import { withStudioCredential } from '@/lib/server/creative/provider-credentials'
 
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
     const resolution = String(input.resolution ?? '')
     if (/^gpt-image-/i.test(model)) {
       const requestedSize = promptSize?.source === 'dimensions' ? promptSize : undefined
-      body.size ||= aspectRatio ? sizeForResolution(aspectRatio, resolution || '1K', requestedSize) : 'auto'
+      body.size = normalizeGptImageSize(body.size, aspectRatio, resolution || '1K', requestedSize)
       const outputFormat = String(body.output_format || '').toLowerCase()
       const background = String(body.background || '').toLowerCase()
       if (!outputFormat && background === 'transparent') body.output_format = 'png'
@@ -165,21 +165,28 @@ export async function POST(request: Request) {
         return sub2apiFetch('/v1/images/generations', { apiKey, method: 'POST', headers: requestHeaders, body: JSON.stringify(requestBody) })
       }
     }
+    async function requestImageWithCompatibility(apiKey: string, requestBody: Record<string, unknown>, requestHeaders: Record<string, string>, requestPrompt = prompt) {
+      try {
+        return await requestImage(apiKey, requestBody, requestHeaders, requestPrompt)
+      } catch (error) {
+        if (!/^gpt-image-/i.test(model) || !isGptImageSizeValidationError(error) || requestBody.size === GPT_IMAGE_PROVIDER_SAFE_SIZE) throw error
+        return requestImage(apiKey, { ...requestBody, size: GPT_IMAGE_PROVIDER_SAFE_SIZE }, requestHeaders, requestPrompt)
+      }
+    }
     const result = await withStudioCredential(session, 'image', model, async (credential) => {
       try {
-        return await requestImage(credential.apiKey, body, headers)
+        return await requestImageWithCompatibility(credential.apiKey, body, headers)
       } catch (error) {
         if (!groupImageDisabled(error)) throw error
         await wait(800)
-        return requestImage(credential.apiKey, body, headers)
+        return requestImageWithCompatibility(credential.apiKey, body, headers)
       }
     })
-    const value = result && typeof result === 'object' ? result as Record<string, unknown> : {}
-    const id = String(value.id ?? value.task_id ?? value.request_id ?? '')
-    const url = resultUrl(result)
-    if (url) {
+    const id = providerTaskId(result)
+    const urls = resultUrls(result)
+    if (urls.length) {
       const resultId = id || requestId
-      return NextResponse.json({ ...mediaTaskDetails(result, resultId, 'image'), status: 'COMPLETED', result_url: url, estimated_cost: null })
+      return NextResponse.json({ ...mediaTaskDetails(result, resultId, 'image'), status: 'COMPLETED', result_url: urls[0], result_urls: urls, estimated_cost: null })
     }
     if (id) return NextResponse.json({ ...mediaTaskDetails(result, id, 'image'), status: 'IN_PROGRESS', estimated_cost: null })
     const upstreamError = resultError(result)

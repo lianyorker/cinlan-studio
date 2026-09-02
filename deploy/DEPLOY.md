@@ -25,7 +25,7 @@ Windows 上生成的 `.next/standalone` 含 Windows 原生依赖，不能上传�
 先在本地核对发布包输出的 SHA-256，再上传到服务器。以下文件名以当前版本为例，实际以发布包为准：
 
 ```bash
-sha256sum /tmp/cinlan-studio-0.2.7-linux-source-20260817.tar.gz
+sha256sum /tmp/cinlan-studio-0.2.7-linux-source-20260902.tar.gz
 ```
 
 创建系统用户和目录：
@@ -38,7 +38,7 @@ sudo install -d -o cinlan -g cinlan /opt/cinlan-studio /var/lib/cinlan-studio/as
 首次安装源码包：
 
 ```bash
-sudo -u cinlan tar -xzf /tmp/cinlan-studio-0.2.7-linux-source-20260817.tar.gz \
+sudo -u cinlan tar -xzf /tmp/cinlan-studio-0.2.7-linux-source-20260902.tar.gz \
   --strip-components=1 -C /opt/cinlan-studio
 cd /opt/cinlan-studio
 sudo -u cinlan npm ci

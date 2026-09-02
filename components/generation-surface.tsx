@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent } from 'react'
 import { useI18n } from '@/lib/i18n'
@@ -152,6 +152,7 @@ export function GenerationSurface({
   const localGenerationId = useRef(0)
   const previousModelSlug = useRef<string | null>(null)
   const pollers = useRef<ReturnType<typeof setInterval>[]>([])
+  const uploadCounts = useRef({ image: 0, video: 0 })
   const activityJobIdRef = useRef('')
 
   const hasVideoField = fields.some((f) => f.type === 'video_upload')
@@ -317,11 +318,12 @@ export function GenerationSurface({
     return body
   }
 
-  async function uploadReference(file: File, setBusy: (b: boolean) => void): Promise<string> {
+  async function uploadReference(file: File, setBusy: (b: boolean) => void, kind: 'image' | 'video'): Promise<string> {
     if (!connected) {
       onNeedConnect()
       return ''
     }
+    uploadCounts.current[kind] += 1
     setBusy(true)
     setError('')
     try {
@@ -335,7 +337,8 @@ export function GenerationSurface({
       setError(err instanceof ApiError ? err.message : 'Upload failed')
       return ''
     } finally {
-      setBusy(false)
+      uploadCounts.current[kind] = Math.max(0, uploadCounts.current[kind] - 1)
+      if (uploadCounts.current[kind] === 0) setBusy(false)
     }
   }
 
@@ -343,8 +346,7 @@ export function GenerationSurface({
     const input = e.target
     const files = Array.from(input.files ?? []).filter((file) => file.type.startsWith('image/')).slice(0, Math.max(0, maxReferenceImages - imageUrls.length))
     if (!files.length) return
-    setUploading(true)
-    const urls = (await Promise.all(files.map((file) => uploadReference(file, setUploading)))).filter(Boolean)
+    const urls = (await Promise.all(files.map((file) => uploadReference(file, setUploading, 'image')))).filter(Boolean)
     setImageUrls((current) => [...current, ...urls].slice(0, maxReferenceImages))
     input.value = ''
   }
@@ -353,7 +355,7 @@ export function GenerationSurface({
     const input = e.target
     const file = input.files?.[0]
     if (!file) return
-    const url = await uploadReference(file, setUploadingVideo)
+    const url = await uploadReference(file, setUploadingVideo, 'video')
     if (url) setVideoUrl(url)
     input.value = ''
   }
@@ -369,8 +371,7 @@ export function GenerationSurface({
       .slice(0, Math.max(0, maxReferenceImages - imageUrls.length))
     if (!files.length) return
     event.preventDefault()
-    setUploading(true)
-    void Promise.all(files.map((file) => uploadReference(file, setUploading))).then((urls) => {
+    void Promise.all(files.map((file) => uploadReference(file, setUploading, 'image'))).then((urls) => {
       setImageUrls((current) => [...current, ...urls.filter(Boolean)].slice(0, maxReferenceImages))
     })
   }
@@ -430,7 +431,12 @@ export function GenerationSurface({
     let polls = 0
     let failures = 0
     let running = false
-    const stop = () => clearInterval(interval)
+    let interval: ReturnType<typeof setInterval> | undefined
+    const stop = () => {
+      if (interval === undefined) return
+      clearInterval(interval)
+      pollers.current = pollers.current.filter((poller) => poller !== interval)
+    }
     const tick = async () => {
       if (running) return
       running = true
@@ -442,7 +448,7 @@ export function GenerationSurface({
           updateSlotRange(slotStart, expectedCount, () => ({ status: 'error', error: t.ws.failed, aspectRatio }))
           return
         }
-        const task = await api.task(id)
+        const task = await api.task(id, isVideo ? 'video' : 'image')
         failures = 0
         const urls = task.result_urls?.length ? task.result_urls : task.result_url ? [task.result_url] : []
         if (activityJobIdRef.current === id) setActivityStatus(task.status)
@@ -491,7 +497,7 @@ export function GenerationSurface({
         running = false
       }
     }
-    const interval = setInterval(() => void tick(), POLL_MS)
+    interval = setInterval(() => void tick(), POLL_MS)
     pollers.current.push(interval)
     void tick()
     return interval
@@ -592,38 +598,50 @@ export function GenerationSurface({
   function poll(id: string, index: number, promptSnapshot = prompt) {
     return new Promise<void>((resolve) => {
       let n = 0
+      let settled = false
+      const settle = () => {
+        if (settled) return false
+        settled = true
+        clearInterval(iv)
+        pollers.current = pollers.current.filter((poller) => poller !== iv)
+        resolve()
+        return true
+      }
       const iv = setInterval(async () => {
         n += 1
         if (n > MAX_POLLS) {
-          clearInterval(iv)
+          settle()
           setCurrentCloudTasks((prev) => prev.filter((task) => task.id !== id))
           setSlot(index, { status: 'error', error: t.ws.failed })
-          return resolve()
+          return
         }
         let task: Task
         try {
-          task = await api.task(id)
+          task = await api.task(id, isVideo ? 'video' : 'image')
         } catch (e) {
-          clearInterval(iv)
+          settle()
           setCurrentCloudTasks((prev) => prev.filter((task) => task.id !== id))
           handleError(e, index)
-          return resolve()
+          return
         }
-        if (task.status === 'COMPLETED') {
-          clearInterval(iv)
-          setSlot(index, { status: 'done', url: task.result_url })
-          if (task.result_url) await saveStudioHistory({ id: `${model.slug}-${id}-${index}`, type: isVideo ? 'video' : 'image', source: 'cloud', model: model.name, prompt: promptSnapshot, resultUrl: task.result_url, status: 'COMPLETED', createdAt: Date.now() }).catch(() => {})
+        const urls = task.result_urls?.length ? task.result_urls : task.result_url ? [task.result_url] : []
+        if (task.status === 'COMPLETED' || task.status === 'PARTIAL_SUCCESS') {
+          settle()
+          const firstUrl = urls[0]
+          setSlot(index, firstUrl ? { status: 'done', url: firstUrl } : { status: 'error', error: t.creative.partial })
+          if (firstUrl) await saveStudioHistory({ id: `${model.slug}-${id}-${index}`, type: isVideo ? 'video' : 'image', source: 'cloud', model: model.name, prompt: promptSnapshot, resultUrl: firstUrl, status: 'COMPLETED', createdAt: Date.now() }).catch(() => {})
           setCurrentCloudTasks((prev) => prev.filter((task) => task.id !== id))
           setRefreshToken((prev) => prev + 1)
-          refreshMe()
-          resolve()
-        } else if (task.status === 'FAILED') {
-          clearInterval(iv)
+          void refreshMe()
+          return
+        }
+        if (task.status === 'FAILED' || task.status === 'CANCELLED' || task.status === 'EXPIRED') {
+          settle()
           setCurrentCloudTasks((prev) => prev.filter((task) => task.id !== id))
-          setSlot(index, { status: 'error', error: task.error || t.ws.failed })
-          await saveStudioHistory({ id: `${model.slug}-${id}-${index}`, type: isVideo ? 'video' : 'image', source: 'cloud', model: model.name, prompt: promptSnapshot, status: 'FAILED', error: task.error || t.ws.failed, createdAt: Date.now() }).catch(() => {})
-          refreshMe()
-          resolve()
+          const message = task.error || (task.status === 'CANCELLED' ? t.creative.cancelled : task.status === 'EXPIRED' ? t.creative.expired : t.ws.failed)
+          setSlot(index, { status: 'error', error: message })
+          await saveStudioHistory({ id: `${model.slug}-${id}-${index}`, type: isVideo ? 'video' : 'image', source: 'cloud', model: model.name, prompt: promptSnapshot, status: 'FAILED', error: message, createdAt: Date.now() }).catch(() => {})
+          void refreshMe()
         }
       }, POLL_MS)
       pollers.current.push(iv)

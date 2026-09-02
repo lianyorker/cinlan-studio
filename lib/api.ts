@@ -40,6 +40,21 @@ export class ApiError extends Error {
   }
 }
 
+async function streamRequest(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers)
+  const multipart = typeof FormData !== 'undefined' && init?.body instanceof FormData
+  if (init?.body && !multipart && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const res = await fetch(BASE + path, { ...init, headers })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    const root = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+    const nested = root.error && typeof root.error === 'object' ? root.error as Record<string, unknown> : {}
+    const message = String(typeof root.error === 'string' ? root.error : nested.message ?? root.message ?? res.statusText)
+    const code = typeof (nested.code ?? root.code) === 'string' ? String(nested.code ?? root.code) : undefined
+    throw new ApiError(res.status, message, code, Object.keys(nested).length ? nested : root)
+  }
+  return res
+}
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) }
   const multipart = typeof FormData !== 'undefined' && init?.body instanceof FormData
@@ -50,7 +65,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const root = data && typeof data === 'object' ? data as Record<string, unknown> : {}
     const nested = root.error && typeof root.error === 'object' ? root.error as Record<string, unknown> : {}
-    const message = String(nested.message ?? root.message ?? res.statusText)
+    const message = String(typeof root.error === 'string' ? root.error : nested.message ?? root.message ?? res.statusText)
     const code = typeof (nested.code ?? root.code) === 'string' ? String(nested.code ?? root.code) : undefined
     throw new ApiError(res.status, message, code, Object.keys(nested).length ? nested : root)
   }
@@ -138,7 +153,9 @@ export const api = {
     request<GenerateResult>('/api/v1/generate/video', { method: 'POST', body: JSON.stringify(body) }),
   generateText: (body: Record<string, unknown>) =>
     request<{ type: 'text'; model: string; prompt: string; result: unknown }>('/api/v1/generate/text', { method: 'POST', body: JSON.stringify(body) }),
-  task: (id: string) => request<Task>(`/api/v1/tasks/${encodeURIComponent(id)}`),
+  generateTextStream: (body: Record<string, unknown>, signal?: AbortSignal) =>
+    streamRequest('/api/v1/generate/text', { method: 'POST', body: JSON.stringify({ ...body, stream: true }), signal }),
+  task: (id: string, type?: 'image' | 'video') => request<Task>(`/api/v1/tasks/${encodeURIComponent(id)}${type ? `?type=${type}` : ''}`),
   generations: (type?: 'image' | 'video' | 'trending', page = 1, pageSize = 24) =>
     request<{ generations: CloudGeneration[]; pagination: Paginated }>(
       `/api/v1/generations?page=${page}&pageSize=${pageSize}${type ? `&type=${type}` : ''}`

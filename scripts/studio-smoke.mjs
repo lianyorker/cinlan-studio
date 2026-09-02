@@ -904,6 +904,7 @@ async function main() {
   const requests = []
   let degradeModels = false
   let groupRetryAttempts = 0
+  let sizeCompatibilityAttempts = 0
   let transientCatalogCalls = 0
   let expiringCatalogCalls = 0
   const mock = createServer(async (request, response) => {
@@ -950,7 +951,13 @@ async function main() {
       return json(response, 200, { data: models.map((id) => ({ id })) })
     }
     if (request.method === 'POST' && url.pathname === '/v1/images/generations/async') {
-      if (body.model === 'mock-gateway-fallback-image' || body.model === 'mock-gateway-fail-image') {
+      if (body.model === 'gpt-image-size-validation') {
+        sizeCompatibilityAttempts += 1
+        if (body.size !== '1024x1024') return json(response, 400, { message: '$width must be one of: 768, 832, 848, 864, 896, 928, 1024, 1088, 1136' })
+        return json(response, 200, { data: [{ b64_json: PNG }] })
+      }
+      if (body.model === 'mock-gateway-fallback-image') return json(response, 404, { message: 'async image endpoint unavailable' })
+      if (body.model === 'mock-gateway-fail-image') {
         response.writeHead(502)
         response.end()
         return
@@ -994,6 +1001,13 @@ async function main() {
       return json(response, 200, { id: 'video-task-1', model: 'mock-video-one', status: 'completed', video: { url: 'https://media.example/video.mp4', cover_url: 'https://media.example/cover.jpg', duration: 8 } })
     }
     if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
+      if (body.stream === true) {
+        response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
+        response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'reasoning ' } }] })}\n\n`)
+        await new Promise((resolveWait) => setTimeout(resolveWait, 40))
+        response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'stream result' } }] })}\n\ndata: [DONE]\n\n`)
+        return
+      }
       return json(response, 200, { choices: [{ message: { content: 'reasoning smoke result' } }] })
     }
     return json(response, 404, { message: 'not found' })
@@ -1200,10 +1214,21 @@ async function main() {
     })
     assert.equal(autoSizeGeneration.response.status, 200)
     const autoSizeCall = requests.find((item) => item.path === '/v1/images/generations/async' && item.body?.prompt === 'automatic canvas smoke')
-    assert.equal(autoSizeCall?.body?.size, 'auto')
+    assert.equal(autoSizeCall?.body?.size, '1024x1024')
     assert.equal(autoSizeCall?.body?.background, undefined)
     assert.equal(autoSizeCall?.body?.output_format, undefined)
     assert.equal(autoSizeCall?.body?.aspect_ratio, undefined)
+
+    const sizeCompatibilityGeneration = await fetchJson(`${appUrl}/api/v1/generate/image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ model: 'gpt-image-size-validation', prompt: 'size compatibility smoke', aspectRatio: '16:9', quality: 'high' }),
+    })
+    assert.equal(sizeCompatibilityGeneration.response.status, 200)
+    assert.equal(sizeCompatibilityGeneration.value.status, 'COMPLETED')
+    assert.equal(sizeCompatibilityAttempts, 2)
+    const sizeCompatibilityCalls = requests.filter((item) => item.body?.model === 'gpt-image-size-validation')
+    assert.deepEqual(sizeCompatibilityCalls.map((item) => item.body?.size), ['1280x720', '1024x1024'])
 
     const disabledTransparentInference = await fetchJson(`${appUrl}/api/v1/generate/image`, {
       method: 'POST',
@@ -1234,15 +1259,15 @@ async function main() {
     const aspectCall = requests.find((item) => item.path === '/v1/images/generations/async' && item.body?.prompt === 'wide smoke')
     assert.equal(aspectCall?.body?.aspect_ratio, undefined)
     assert.equal(aspectCall?.body?.n, undefined)
-    assert.equal(aspectCall?.body?.size, '1024x680')
+    assert.equal(aspectCall?.body?.size, '1536x1024')
     assert.equal(aspectCall?.body?.quality, 'high')
     assert.equal(aspectCall?.body?.background, undefined)
     assert.equal(aspectCall?.body?.output_format, undefined)
 
     for (const [prompt, expectedSize] of [
-      ['prompt ratio smoke 4:5', '816x1024'],
-      ['prompt ratio smoke 16:9', '1024x576'],
-      ['prompt ratio smoke 1080：1920', '576x1024'],
+      ['prompt ratio smoke 4:5', '896x1120'],
+      ['prompt ratio smoke 16:9', '1280x720'],
+      ['prompt ratio smoke 1080：1920', '720x1280'],
     ]) {
       const inferredRatioGeneration = await fetchJson(`${appUrl}/api/v1/generate/image`, {
         method: 'POST',
@@ -1262,7 +1287,7 @@ async function main() {
     })
     assert.equal(bannerGeneration.response.status, 200)
     const bannerCall = requests.find((item) => item.path === '/v1/images/generations/async' && item.body?.prompt === bannerPrompt)
-    assert.equal(bannerCall?.body?.size, '1600x440')
+    assert.equal(bannerCall?.body?.size, '1536x512')
     assert.equal(bannerCall?.body?.aspect_ratio, undefined)
 
     const squareGeneration = await fetchJson(`${appUrl}/api/v1/generate/image`, {
@@ -1340,6 +1365,20 @@ async function main() {
     assert.equal(textGeneration.value.result.choices[0].message.content, 'reasoning smoke result')
     const textCall = requests.find((item) => item.path === '/v1/chat/completions' && item.body?.messages?.[0]?.content === 'reasoning smoke')
     assert.equal(textCall?.body?.reasoning_effort, 'xhigh')
+
+    const textStreamResponse = await fetch(`${appUrl}/api/v1/generate/text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ model: 'mock-text-two', prompt: 'streaming smoke', stream: true }),
+    })
+    assert.equal(textStreamResponse.status, 200)
+    assert.match(textStreamResponse.headers.get('content-type') || '', /text\/event-stream/)
+    const textStreamBody = await textStreamResponse.text()
+    assert.match(textStreamBody, /reasoning /)
+    assert.match(textStreamBody, /stream result/)
+    assert.match(textStreamBody, /\[DONE\]/)
+    const textStreamCall = requests.find((item) => item.path === '/v1/chat/completions' && item.body?.messages?.[0]?.content === 'streaming smoke')
+    assert.equal(textStreamCall?.body?.stream, true)
 
     const browserSmokeRan = await runBrowserSmoke(appUrl, () => requests)
     if (browserSmokeRan) {

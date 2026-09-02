@@ -15,6 +15,8 @@
     "test:markdown": "tsx scripts/markdown-render-test.tsx",
     "test:auth-errors": "tsx scripts/auth-error-test.ts",
     "test:image-size": "tsx scripts/image-size-test.ts",
+    "test:provider-response": "tsx scripts/provider-response-test.ts",
+    "test:text-stream": "tsx scripts/text-stream-test.ts",
     "test:standalone": "node scripts/standalone-smoke.mjs",
     "lint": "next lint",
     "test:smoke": "node scripts/studio-smoke.mjs"

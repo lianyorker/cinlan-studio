@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import type { Dict } from '@/lib/i18n/en'
 import { api, ApiError } from '@/lib/api'
@@ -12,6 +12,7 @@ import { IconArrowUp, IconChevronDown, IconCopy, IconSparkle } from './icons'
 import { MarkdownContent } from './markdown-content'
 import { ModelLogo } from './model-visual'
 import { ComposerSelect } from './composer-select'
+import { appendTextDelta, errorMessageFromPayload, parseJsonData, takeSseFrames, textDeltaFromPayload } from '@/lib/text-stream'
 
 interface ReasoningField {
   type: string
@@ -19,16 +20,6 @@ interface ReasoningField {
   default?: string
 }
 
-function extractText(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (!value || typeof value !== 'object') return ''
-  const root = value as Record<string, any>
-  const choices = Array.isArray(root.choices) ? root.choices : []
-  const content = choices[0]?.message?.content ?? choices[0]?.text
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) return content.map((item) => item?.text || '').join('')
-  return root.output_text || root.output || root.text || ''
-}
 
 export function TextSurface({ model, onOpenPicker, onNeedConnect }: { model: Model; onOpenPicker: () => void; onNeedConnect: () => void }) {
   const { t } = useI18n()
@@ -44,38 +35,112 @@ export function TextSurface({ model, onOpenPicker, onNeedConnect }: { model: Mod
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+  const requestSequence = useRef(0)
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     const preferred = reasoningField?.default ?? (reasoningOptions.includes('xhigh') ? 'xhigh' : reasoningOptions[0])
     setReasoningEffort(preferred ?? '')
   }, [model.slug, reasoningField?.default, reasoningOptions.join('|')])
 
+  useEffect(() => {
+    requestSequence.current += 1
+    abortRef.current?.abort()
+    abortRef.current = null
+    setBusy(false)
+    setResult('')
+    setError('')
+    setCopied(false)
+    return () => {
+      requestSequence.current += 1
+      abortRef.current?.abort()
+      abortRef.current = null
+    }
+  }, [model.slug])
+
   async function generate() {
     const value = prompt.trim()
     if (!value || busy) return
     if (!connected) return onNeedConnect()
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    const sequence = ++requestSequence.current
     setBusy(true)
     setError('')
+    setResult('')
     setCopied(false)
     setPrompt('')
+    let accumulated = ''
+    let streamError = ''
+    let finalPayload: unknown
+    const applyPayload = (payload: unknown) => {
+      if (sequence !== requestSequence.current) return
+      const message = errorMessageFromPayload(payload)
+      if (message) {
+        streamError = message
+        setError(message)
+        return
+      }
+      const chunk = textDeltaFromPayload(payload)
+      if (!chunk) return
+      // Providers can mix token deltas with a final full-message snapshot.
+      // Merge both forms without duplicating the already rendered prefix.
+      const next = appendTextDelta(accumulated, chunk)
+      if (next === accumulated) return
+      accumulated = next
+      setResult(accumulated)
+    }
     try {
-      const response = await api.generateText({
+      const response = await api.generateTextStream({
         model: model.slug,
         prompt: value,
         ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-      })
-      const text = extractText(response.result) || t.text.noResult
+      }, controller.signal)
+      if (!response.body) throw new Error('文字服务没有返回可读取的流')
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      try {
+        while (true) {
+          const { value: bytes, done } = await reader.read()
+          if (bytes) buffer += decoder.decode(bytes, { stream: !done })
+          if (done) buffer += decoder.decode()
+          const parsed = takeSseFrames(buffer, done)
+          buffer = parsed.remainder
+          for (const frame of parsed.frames) {
+            if (frame.data === '[DONE]') continue
+            const payload = parseJsonData(frame.data)
+            finalPayload = payload
+            applyPayload(payload)
+          }
+          if (done) break
+        }
+      } finally {
+        reader.releaseLock()
+      }
+      if (sequence !== requestSequence.current) return
+      if (streamError) return
+      if (!accumulated) {
+        const fallback = textDeltaFromPayload(finalPayload)
+        if (fallback) { accumulated = fallback; setResult(fallback) }
+      }
+      const text = accumulated || t.text.noResult
       setResult(text)
       await saveStudioHistory({ id: `text-${Date.now()}`, type: 'text', source: 'cloud', model: model.name, prompt: value, textResult: text, status: 'COMPLETED', createdAt: Date.now() })
     } catch (err) {
+      if (controller.signal.aborted || sequence !== requestSequence.current) return
       if (err instanceof ApiError && err.status === 401 && err.code === 'AUTH_REQUIRED') {
         await refreshMe()
-        onNeedConnect()
+        if (sequence === requestSequence.current) onNeedConnect()
       } else {
         setError(err instanceof ApiError && err.status === 502 ? t.ws.upstreamUnavailable : err instanceof ApiError ? err.message : t.text.failed)
       }
     } finally {
-      setBusy(false)
+      if (sequence === requestSequence.current) {
+        setBusy(false)
+        if (abortRef.current === controller) abortRef.current = null
+      }
     }
   }
 
@@ -102,12 +167,15 @@ export function TextSurface({ model, onOpenPicker, onNeedConnect }: { model: Mod
               <div className="text-xs font-medium text-neutral-400">{busy ? t.text.generating : result ? model.name : t.text.newText}</div>
               {result && <button type="button" onClick={() => void copyResult()} className="composer-control"><IconCopy className="h-3.5 w-3.5" />{copied ? t.history.copied : t.text.copyResult}</button>}
             </div>
-            {busy ? (
+            {result ? (
+              <div data-testid="text-result" className="relative">
+                <article><MarkdownContent value={result} /></article>
+                {busy && <span data-testid="text-streaming-cursor" aria-hidden="true" className="ml-1 inline-block h-5 w-0.5 animate-pulse bg-neutral-400 align-middle" />}
+              </div>
+            ) : busy ? (
               <div role="status" aria-label={t.text.generating} className="space-y-3 animate-pulse">
                 {[92, 85, 96, 72, 88, 64].map((width, index) => <div key={index} style={{ width: `${width}%` }} className="h-3 rounded bg-neutral-100 dark:bg-neutral-900" />)}
               </div>
-            ) : result ? (
-              <article><MarkdownContent value={result} /></article>
             ) : (
               <div className="grid min-h-[250px] place-items-center text-center text-sm text-neutral-400">
                 <div><IconSparkle className="mx-auto mb-3 h-6 w-6" /><p>{t.text.empty}</p></div>

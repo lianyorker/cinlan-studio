@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { imageAspectRatioFromPrompt, imageSizeIntentFromPrompt, normalizeImageAspectRatio } from '../lib/image-aspect-ratio'
-import { sizeForResolution } from '../lib/server/creative/provider'
+import { isValidGptImageSize, normalizeGptImageSize, sizeForResolution } from '../lib/server/creative/provider'
 
 const supported = ['1:1', '3:2', '2:3', '4:3', '3:4', '5:4', '4:5', '16:9', '9:16', '21:9']
 
@@ -17,10 +17,16 @@ assert.deepEqual(banner, { width: 1600, height: 440, aspectRatio: '40:11', sourc
 
 const labeled = imageSizeIntentFromPrompt('尺寸长440宽1660，电商租赁横幅', supported)
 assert.deepEqual(labeled, { width: 1660, height: 440, aspectRatio: '83:22', source: 'dimensions' })
-assert.equal(sizeForResolution(banner!.aspectRatio, '1K', banner), '1600x440')
+assert.equal(sizeForResolution(banner!.aspectRatio, '1K', banner), '1536x512')
+assert.equal(normalizeGptImageSize('auto', '', '1K'), '1024x1024')
+assert.equal(normalizeGptImageSize('1024x640', '', '1K'), '1024x640')
+assert.equal(normalizeGptImageSize('1024x680', '3:2', '1K'), '1536x1024')
+assert.equal(normalizeGptImageSize('1600x440', banner!.aspectRatio, '1K', banner), '1536x512')
+assert.equal(isValidGptImageSize('1024x640'), true)
+assert.equal(isValidGptImageSize('1024x680'), false)
 const portraitRatio = imageSizeIntentFromPrompt('制作 9:16 竖屏海报', supported)
 assert.equal(portraitRatio?.source, 'named')
-assert.equal(sizeForResolution(portraitRatio!.aspectRatio, '1K'), '576x1024')
-assert.equal(sizeForResolution('9:16', '1K'), '576x1024')
+assert.equal(sizeForResolution(portraitRatio!.aspectRatio, '1K'), '720x1280')
+assert.equal(sizeForResolution('9:16', '1K'), '720x1280')
 
 console.log('Image size test passed')

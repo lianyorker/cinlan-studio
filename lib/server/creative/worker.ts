@@ -103,7 +103,10 @@ async function finishCancellation(jobId: string, providerMayContinue = false) {
 
 async function finalizeResults(job: JobRecord, outputAssets: Awaited<ReturnType<typeof jobAssets>>, recovered = false) {
   const resolution = String(job.parameters.resolution || '').toUpperCase()
-  const minimumEdge = resolution === '4K' ? 3840 : resolution === '2K' ? 2048 : resolution === '1K' ? 1024 : 0
+  const requestedSize = /^\s*(\d{2,6})\s*x\s*(\d{2,6})\s*$/i.exec(String(job.parameters.size || ''))
+  const minimumEdge = requestedSize
+    ? Math.max(Number(requestedSize[1]), Number(requestedSize[2]))
+    : resolution === '4K' ? 3840 : resolution === '2K' ? 2048 : resolution === '1K' ? 1024 : 0
   const undersized = minimumEdge > 0 && outputAssets.some((asset) => Math.max(asset.width || 0, asset.height || 0) > 0 && Math.max(asset.width || 0, asset.height || 0) < minimumEdge)
   const count = Math.min(4, Math.max(1, Number(job.parameters.count || 1)))
   const partial = outputAssets.length < count || undersized

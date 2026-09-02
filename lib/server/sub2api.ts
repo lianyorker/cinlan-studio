@@ -20,8 +20,8 @@ export class Sub2ApiError extends Error {
   }
 }
 
-function parseEventStream(text: string): unknown {
-  const events: Array<Record<string, unknown>> = []
+export function parseEventStream(text: string): unknown {
+  const events: unknown[] = []
   let eventName = ''
   let dataLines: string[] = []
 
@@ -33,30 +33,38 @@ function parseEventStream(text: string): unknown {
       return
     }
     try {
-      const value = JSON.parse(data) as Record<string, unknown>
-      if (eventName && !value.type) value.type = eventName
-      events.push(value)
+      const parsed = JSON.parse(data) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const value = { ...(parsed as Record<string, unknown>) }
+        if (eventName && !value.type) value.type = eventName
+        events.push(value)
+      } else {
+        events.push(parsed)
+      }
     } catch {
       // Ignore keepalive and non-JSON SSE frames.
     }
     eventName = ''
   }
 
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
     if (!line) {
       flush()
     } else if (line.startsWith('event:')) {
       eventName = line.slice(6).trim()
     } else if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart())
+      dataLines.push(line.slice(5).replace(/^ /, ''))
     }
   }
   flush()
 
-  return events.findLast((event) => String(event.type ?? '').endsWith('.completed'))
-    ?? events.findLast((event) => typeof event.b64_json === 'string' || typeof event.url === 'string')
-    ?? events.findLast((event) => event.error !== undefined)
-    ?? text
+  const objects = events.filter((event): event is Record<string, unknown> => Boolean(event) && typeof event === 'object' && !Array.isArray(event))
+  if (!events.length) return text
+  if (events.length === 1) return events[0]
+  // Keep every frame: providers commonly put the task ID in an initial
+  // frame and the final image in a later frame. Returning only the last
+  // frame loses one half of that response and causes false 502 errors.
+  return { ...objects.reduce<Record<string, unknown>>((merged, event) => ({ ...merged, ...event }), {}), events }
 }
 
 export async function sub2apiFetch<T>(
@@ -65,7 +73,7 @@ export async function sub2apiFetch<T>(
 ): Promise<T> {
   const { accessToken, apiKey, ...requestInit } = init
   const headers = new Headers(requestInit.headers)
-  headers.set('Accept', 'application/json')
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json')
   const multipart = typeof FormData !== 'undefined' && requestInit.body instanceof FormData
   if (requestInit.body && !multipart && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
@@ -106,7 +114,8 @@ export async function sub2apiFetch<T>(
     const errorObject = errorValue && typeof errorValue === 'object' ? errorValue as Record<string, unknown> : null
     const statusText = response.statusText?.trim()
     const rawMessage = String(
-      errorObject?.message
+      typeof errorValue === 'string' ? errorValue
+      : errorObject?.message
       ?? envelope?.message
       ?? (statusText && statusText !== '<none>' ? statusText : undefined)
       ?? `Sub2API request failed with HTTP ${response.status}`
@@ -114,7 +123,7 @@ export async function sub2apiFetch<T>(
     const message = response.status >= 500 && /bad gateway|<html|nginx|cloudflare/i.test(rawMessage)
       ? 'Sub2API upstream request failed'
       : rawMessage
-    const code = typeof errorObject?.code === 'string' ? errorObject.code : `UPSTREAM_HTTP_${response.status}`
+    const code = typeof errorObject?.code === 'string' ? errorObject.code : typeof (envelope as Record<string, unknown>)?.code === 'string' ? String((envelope as Record<string, unknown>).code) : `UPSTREAM_HTTP_${response.status}`
     throw new Sub2ApiError(response.status, message, code, payload)
   }
 
@@ -125,6 +134,66 @@ export async function sub2apiFetch<T>(
   return payload as T
 }
 
+export async function sub2apiStream(
+  path: string,
+  init: RequestInit & { accessToken?: string; apiKey?: string } = {},
+): Promise<Response> {
+  const { accessToken, apiKey, ...requestInit } = init
+  const headers = new Headers(requestInit.headers)
+  if (!headers.has('Accept')) headers.set('Accept', 'text/event-stream')
+  const multipart = typeof FormData !== 'undefined' && requestInit.body instanceof FormData
+  if (requestInit.body && !multipart && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+  else if (apiKey) headers.set('Authorization', `Bearer ${apiKey}`)
+
+  let response: Response
+  try {
+    response = await fetch(`${SUB2API_BASE_URL}${path}`, {
+      ...requestInit,
+      headers,
+      cache: 'no-store',
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      throw new Sub2ApiError(504, 'Sub2API upstream request timed out', 'SUB2API_TIMEOUT')
+    }
+    throw new Sub2ApiError(502, 'Sub2API upstream request failed', 'SUB2API_FETCH_FAILED', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  if (response.ok) return response
+
+  const text = await response.text()
+  const contentType = response.headers.get('content-type') ?? ''
+  let payload: unknown = null
+  if (contentType.includes('text/event-stream') || /^\s*(?:event|data):/m.test(text)) {
+    payload = parseEventStream(text)
+  } else {
+    try {
+      payload = text ? JSON.parse(text) : null
+    } catch {
+      payload = text
+    }
+  }
+  const envelope = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
+  const errorValue = envelope.error
+  const errorObject = errorValue && typeof errorValue === 'object' ? errorValue as Record<string, unknown> : null
+  const statusText = response.statusText?.trim()
+  const rawMessage = String(
+    typeof errorValue === 'string' ? errorValue
+    : errorObject?.message
+    ?? envelope.message
+    ?? (statusText && statusText !== '<none>' ? statusText : undefined)
+    ?? `Sub2API request failed with HTTP ${response.status}`
+  )
+  const message = response.status >= 500 && /bad gateway|<html|nginx|cloudflare/i.test(rawMessage)
+    ? 'Sub2API upstream request failed'
+    : rawMessage
+  const code = typeof errorObject?.code === 'string' ? errorObject.code : typeof envelope.code === 'string' ? envelope.code : `UPSTREAM_HTTP_${response.status}`
+  throw new Sub2ApiError(response.status, message, code, payload)
+}
 export function newRequestId(prefix = 'cinlan') {
   return `${prefix}_${Date.now().toString(36)}_${randomBytes(8).toString('hex')}`
 }

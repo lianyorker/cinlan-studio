@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireGenerationSession, canonicalBody, mediaTaskDetails } from '@/lib/server/generation'
+import { requireGenerationSession, canonicalBody, mediaTaskDetails, normalizedStatus, providerTaskId, resultUrls } from '@/lib/server/generation'
 import { newRequestId, Sub2ApiError, sub2apiFetch } from '@/lib/server/sub2api'
 import { CreativeCoreError } from '@/lib/server/creative/errors'
 import { creativeErrorResponse } from '@/lib/server/creative/http'
@@ -33,10 +33,11 @@ export async function POST(request: Request) {
       headers: { 'Idempotency-Key': requestId },
       body: JSON.stringify(body),
     }))
-    const value = result && typeof result === 'object' ? result as Record<string, unknown> : {}
-    const id = String(value.request_id ?? value.id ?? value.task_id ?? requestId)
+    const id = providerTaskId(result) || requestId
     const details = mediaTaskDetails(result, id, 'video')
-    return NextResponse.json({ ...details, status: details.result_url ? 'COMPLETED' : 'IN_PROGRESS', estimated_cost: null })
+    const urls = resultUrls(result)
+    const status = urls.length ? 'COMPLETED' : normalizedStatus(details.status)
+    return NextResponse.json({ ...details, result_url: details.result_url || urls[0], result_urls: details.result_urls?.length ? details.result_urls : urls, status, estimated_cost: null })
   } catch (error) {
     if (error instanceof Sub2ApiError) {
       if (/videos api is not supported for this platform/i.test(error.message)) {
