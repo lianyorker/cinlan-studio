@@ -2,9 +2,17 @@ import { randomBytes } from 'node:crypto'
 
 type Envelope<T> = { code?: number; message?: string; data?: T } & Record<string, unknown>
 
-const rawBase = process.env.SUB2API_BASE_URL || process.env.NEXT_PUBLIC_SUB2API_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api.cinlan.online'
+const rawBase = process.env.SUB2API_BASE_URL
+  || (process.env.NODE_ENV !== 'production' ? (process.env.NEXT_PUBLIC_SUB2API_URL || process.env.NEXT_PUBLIC_API_URL) : '')
+  || 'https://api.cinlan.online'
 
 export const SUB2API_BASE_URL = rawBase.replace(/\/$/, '').replace(/\/v1$/, '')
+
+const HEADER_VALUE_MAX_LENGTH = 200
+
+export function sanitizeHeader(value: string): string {
+  return value.replace(/[\r\n\t]/g, '').slice(0, HEADER_VALUE_MAX_LENGTH)
+}
 
 export class Sub2ApiError extends Error {
   status: number
@@ -196,4 +204,10 @@ export async function sub2apiStream(
 }
 export function newRequestId(prefix = 'cinlan') {
   return `${prefix}_${Date.now().toString(36)}_${randomBytes(8).toString('hex')}`
+}
+
+export function safeIdempotencyKey(input: unknown, fallbackPrefix: string): string {
+  const raw = typeof input === 'string' ? input.trim() : ''
+  if (!raw) return newRequestId(fallbackPrefix)
+  return sanitizeHeader(raw)
 }

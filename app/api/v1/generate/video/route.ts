@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { requireGenerationSession, canonicalBody, mediaTaskDetails, normalizedStatus, providerTaskId, resultUrls } from '@/lib/server/generation'
-import { newRequestId, Sub2ApiError, sub2apiFetch } from '@/lib/server/sub2api'
+import { safeIdempotencyKey, Sub2ApiError, sub2apiFetch } from '@/lib/server/sub2api'
 import { CreativeCoreError } from '@/lib/server/creative/errors'
 import { creativeErrorResponse } from '@/lib/server/creative/http'
 import { withStudioCredential } from '@/lib/server/creative/provider-credentials'
@@ -26,12 +26,13 @@ export async function POST(request: Request) {
     else if (imageUrls.length === 1) body.image_url = imageUrls[0]
     if (input.count !== undefined) body.n = input.count
     if (!model || !prompt.trim()) return NextResponse.json({ message: '模型和 Prompt 不能为空' }, { status: 400 })
-    const requestId = String(input.idempotency_key ?? newRequestId('video'))
+    const requestId = safeIdempotencyKey(input.idempotency_key, 'video')
     const result = await withStudioCredential(session, 'video', model, (credential) => sub2apiFetch<unknown>('/v1/videos/generations', {
       apiKey: credential.apiKey,
       method: 'POST',
       headers: { 'Idempotency-Key': requestId },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
     }))
     const id = providerTaskId(result) || requestId
     const details = mediaTaskDetails(result, id, 'video')
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
           code: 'VIDEO_PLATFORM_UNSUPPORTED',
         }, { status: 409 })
       }
-      return NextResponse.json({ message: error.message, code: error.code }, { status: error.status })
+      return creativeErrorResponse(error)
     }
     if (error instanceof CreativeCoreError) return creativeErrorResponse(error)
     return NextResponse.json({ message: error instanceof Error ? error.message : '视频生成失败' }, { status: 502 })

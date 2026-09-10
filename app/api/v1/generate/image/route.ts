@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { imageSizeIntentFromPrompt } from '@/lib/image-aspect-ratio'
 import { requireGenerationSession, canonicalBody, mediaTaskDetails, providerTaskId, resultError, resultUrls } from '@/lib/server/generation'
-import { newRequestId, Sub2ApiError, sub2apiFetch } from '@/lib/server/sub2api'
+import { safeIdempotencyKey, Sub2ApiError, sub2apiFetch } from '@/lib/server/sub2api'
 import { creativeCoreConfigured } from '@/lib/server/creative/config'
 import { creativeTaskContract } from '@/lib/server/creative/contracts'
 import { creativeErrorResponse } from '@/lib/server/creative/http'
@@ -137,7 +137,7 @@ export async function POST(request: Request) {
     }
     delete body.aspectRatio
     if (!model || !prompt.trim()) return NextResponse.json({ message: '模型和 Prompt 不能为空' }, { status: 400 })
-    const requestId = String(input.idempotency_key ?? newRequestId('image'))
+    const requestId = safeIdempotencyKey(input.idempotency_key, 'image')
     const headers = { 'Idempotency-Key': requestId }
     async function requestImage(apiKey: string, requestBody: Record<string, unknown>, requestHeaders: Record<string, string>, requestPrompt = prompt) {
       if (references.length) {
@@ -147,6 +147,7 @@ export async function POST(request: Request) {
             method: 'POST',
             headers: requestHeaders,
             body: editForm(requestBody, references, model, requestPrompt, count),
+            signal: AbortSignal.timeout(45_000),
           })
         } catch (error) {
           if (!shouldFallbackToSynchronousImageEndpoint(error)) throw error
@@ -155,14 +156,15 @@ export async function POST(request: Request) {
             method: 'POST',
             headers: { ...requestHeaders, Accept: 'text/event-stream' },
             body: editForm(requestBody, references, model, requestPrompt, count, true),
+            signal: AbortSignal.timeout(240_000),
           })
         }
       }
       try {
-        return await sub2apiFetch('/v1/images/generations/async', { apiKey, method: 'POST', headers: requestHeaders, body: JSON.stringify(requestBody) })
+        return await sub2apiFetch('/v1/images/generations/async', { apiKey, method: 'POST', headers: requestHeaders, body: JSON.stringify(requestBody), signal: AbortSignal.timeout(45_000) })
       } catch (error) {
         if (!shouldFallbackToSynchronousImageEndpoint(error)) throw error
-        return sub2apiFetch('/v1/images/generations', { apiKey, method: 'POST', headers: requestHeaders, body: JSON.stringify(requestBody) })
+        return sub2apiFetch('/v1/images/generations', { apiKey, method: 'POST', headers: requestHeaders, body: JSON.stringify(requestBody), signal: AbortSignal.timeout(240_000) })
       }
     }
     async function requestImageWithCompatibility(apiKey: string, requestBody: Record<string, unknown>, requestHeaders: Record<string, string>, requestPrompt = prompt) {

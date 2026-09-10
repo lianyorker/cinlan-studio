@@ -1,5 +1,5 @@
 import { mediaTaskDetails, providerTaskId, resultError, resultUrls } from '../generation'
-import { newRequestId, Sub2ApiError, sub2apiFetch } from '../sub2api'
+import { newRequestId, sanitizeHeader, Sub2ApiError, sub2apiFetch } from '../sub2api'
 
 export interface ProviderReference {
   bytes: Uint8Array
@@ -222,7 +222,7 @@ export async function requestProviderImage(input: {
   delete parameters.count
 
   async function send(requestParameters: Record<string, unknown>, requestPrompt: string, idempotencyKey: string) {
-    const headers = { 'Idempotency-Key': idempotencyKey }
+    const headers = { 'Idempotency-Key': sanitizeHeader(idempotencyKey) }
     if (input.references.some((reference) => reference.role === 'input')) {
       try {
         return await sub2apiFetch<unknown>('/v1/images/edits/async', {

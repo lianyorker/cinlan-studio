@@ -9,6 +9,7 @@ import { creativeErrorResponse } from '@/lib/server/creative/http'
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 const MAX_VIDEO_BYTES = 32 * 1024 * 1024
+const ALLOWED_MIME_PREFIXES = ['image/', 'video/']
 
 export async function POST(request: Request) {
   try {
@@ -16,6 +17,9 @@ export async function POST(request: Request) {
     const form = await request.formData()
     const file = form.get('file')
     if (!(file instanceof File)) return NextResponse.json({ message: '缺少上传文件' }, { status: 400 })
+    if (!ALLOWED_MIME_PREFIXES.some((prefix) => file.type.startsWith(prefix))) {
+      return NextResponse.json({ message: '仅支持图片和视频文件' }, { status: 400 })
+    }
     const max = file.type.startsWith('video/') ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES
     if (file.size <= 0 || file.size > max) return NextResponse.json({ message: '文件大小超出限制' }, { status: 413 })
     const bytes = Buffer.from(await file.arrayBuffer())

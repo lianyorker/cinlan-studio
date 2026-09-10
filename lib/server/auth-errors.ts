@@ -29,7 +29,7 @@ export function authErrorResponse(error: unknown, fallbackMessage: string, fallb
   }
   if (error instanceof Sub2ApiError) {
     return NextResponse.json(
-      { message: friendlySub2ApiMessage(error), code: error.code, upstream_status: error.status },
+      { message: friendlySub2ApiMessage(error), code: error.code },
       { status: error.status }
     )
   }

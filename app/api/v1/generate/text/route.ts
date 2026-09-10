@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { requireGenerationSession } from '@/lib/server/generation'
-import { newRequestId, Sub2ApiError, sub2apiFetch, sub2apiStream } from '@/lib/server/sub2api'
+import { safeIdempotencyKey, Sub2ApiError, sub2apiFetch, sub2apiStream } from '@/lib/server/sub2api'
 import { CreativeCoreError } from '@/lib/server/creative/errors'
 import { creativeErrorResponse } from '@/lib/server/creative/http'
 import { withStudioCredential } from '@/lib/server/creative/provider-credentials'
@@ -92,7 +92,7 @@ export async function POST(request: Request) {
       stream: wantsStream,
     }
     if (reasoningEffort) body.reasoning_effort = reasoningEffort
-    const requestId = String(input.idempotency_key ?? newRequestId('text'))
+    const requestId = safeIdempotencyKey(input.idempotency_key, 'text')
 
     if (!wantsStream) {
       const result = await withStudioCredential(session, 'text', model, (credential) => sub2apiFetch<unknown>('/v1/chat/completions', {

@@ -20,8 +20,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     }
     return NextResponse.json(await getTask(id, session, undefined, type))
   } catch (error) {
-    if (error instanceof CreativeCoreError) return creativeErrorResponse(error)
-    if (error instanceof Sub2ApiError) return NextResponse.json({ message: error.message, code: error.code }, { status: error.status })
+    if (error instanceof CreativeCoreError || error instanceof Sub2ApiError) return creativeErrorResponse(error)
     return NextResponse.json({ message: error instanceof Error ? error.message : '任务查询失败' }, { status: 502 })
   }
 }
