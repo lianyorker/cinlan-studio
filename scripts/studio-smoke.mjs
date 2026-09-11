@@ -604,6 +604,7 @@ async function runBrowserSmoke(appUrl, upstreamRequests) {
     await waitForEvaluation(client, `document.querySelector('[data-testid="delete-creative-job"]') !== null`, 10_000)
     assert.equal(await client.evaluate(`window.__cinlanTerminalHistoryResolved`), false, 'Terminal task only appeared after the delayed history refresh')
     assert.equal(await client.evaluate(`document.body.innerText.includes('Image generation is not enabled for this group')`), true, 'Terminal task did not expose its failure reason')
+    await waitForEvaluation(client, `document.querySelector('[data-testid="history-work-count"]')?.textContent === '15 个作品'`, 10_000)
     const workCountBeforeDelete = await client.evaluate(`document.querySelector('[data-testid="history-work-count"]')?.textContent`)
     await click(client, `item.getAttribute('data-testid') === 'delete-creative-job' && !item.disabled`)
     await waitForEvaluation(client, `document.querySelector('[data-testid="delete-creative-job"]') === null`, 2_000)

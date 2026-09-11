@@ -42,6 +42,13 @@ function noCompatibleAccounts(error: unknown) {
     && /no available compatible accounts|no available OpenAI accounts supporting model|pool=0/i.test(error.message)
 }
 
+function insufficientBalance(error: unknown) {
+  if (!(error instanceof Error)) return false
+  const code = error instanceof Sub2ApiError || error instanceof CreativeCoreError ? error.code : ''
+  const text = `${code ?? ''} ${error.message}`
+  return /(?:insufficient|not enough).*(?:tokens?|balance|quota|credits?|funds)|(?:tokens?|balance|quota|credits?|funds).*(?:insufficient|not enough|exhausted|depleted)|(?:balance|quota|credits?).*(?:exceeded|too low)|(?:余额|额度|配额).{0,8}(?:不足|不够)|不足.{0,8}(?:余额|额度|配额)/i.test(text)
+}
+
 function creativeControllers() {
   globalThis.__cinlanCreativeControllers ??= new Map()
   return globalThis.__cinlanCreativeControllers
@@ -52,13 +59,14 @@ export function abortInProcessCreativeJob(jobId: string) {
 }
 
 function retryable(error: unknown) {
-  if (noCompatibleAccounts(error)) return false
+  if (noCompatibleAccounts(error) || insufficientBalance(error)) return false
   if (error instanceof Sub2ApiError) return error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500
   return error instanceof TypeError || (error instanceof DOMException && (error.name === 'AbortError' || error.name === 'TimeoutError'))
 }
 
 function errorDetails(error: unknown) {
   if (noCompatibleAccounts(error)) return { code: 'NO_COMPATIBLE_ACCOUNTS', message: error instanceof Error ? error.message : 'No available compatible accounts' }
+  if (insufficientBalance(error)) return { code: 'STUDIO_INSUFFICIENT_BALANCE', message: 'Sub2API account balance is insufficient; please top up before retrying' }
   if (error instanceof Sub2ApiError) return { code: error.code || `UPSTREAM_HTTP_${error.status}`, message: error.message }
   if (error instanceof CreativeCoreError) return { code: error.code, message: error.message }
   return { code: 'CREATIVE_JOB_FAILED', message: error instanceof Error ? error.message : 'Creative job failed' }
@@ -326,7 +334,7 @@ async function workerCredential(job: JobRecord): Promise<StudioProviderCredentia
 }
 
 async function requeueAfterCredentialRotation(job: JobRecord, credential: StudioProviderCredential, error: unknown) {
-  if (!credential.managed || !credential.id || !credential.groupId || !providerCredentialRejected(error)) return false
+  if (!credential.managed || !credential.id || !credential.groupId || insufficientBalance(error) || !providerCredentialRejected(error)) return false
   const current = await getJobInternal(job.id)
   const retryCount = Number(current.parameters.provider_credential_retry_count || 0)
   const rejectedRotation = Number(current.parameters.provider_credential_rejected_rotation || 0)

@@ -164,6 +164,7 @@ async function expectCode(run: () => Promise<unknown>, code: string) {
     repository.createCreativeJob({ ...baseJob, idempotencyKey: 'same-request' }),
   ])
   assert.equal(idempotent[0].id, idempotent[1].id, 'Concurrent idempotent submissions created different jobs')
+  assert.equal(idempotent[0].max_attempts, 5, 'Creative jobs did not use the migrated retry default')
   await expectCode(() => repository.getJobForOwner(ownerB.id, idempotent[0].id), 'CREATIVE_JOB_NOT_FOUND')
 
   const events = await repository.listCreativeEvents(ownerA.id, idempotent[0].id)

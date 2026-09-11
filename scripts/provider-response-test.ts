@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { providerTaskId, resultUrls } from '../lib/server/generation'
 import { parseEventStream, Sub2ApiError } from '../lib/server/sub2api'
-import { GPT_IMAGE_PROVIDER_SAFE_SIZE, isGptImageSizeValidationError } from '../lib/server/creative/provider'
+import { GPT_IMAGE_PROVIDER_SAFE_SIZE, isGptImageSizeValidationError, shouldFallbackToSynchronousImageEndpoint } from '../lib/server/creative/provider'
 
 const png = 'iVBORw0KGgo' + 'A'.repeat(40)
 
@@ -22,5 +22,8 @@ assert.equal(isGptImageSizeValidationError(new Sub2ApiError(400, 'size must be a
 assert.equal(isGptImageSizeValidationError(new Sub2ApiError(400, '$width must be one of: 768, 832, 1024')), true)
 assert.equal(isGptImageSizeValidationError(new Sub2ApiError(400, 'invalid prompt')), false)
 assert.equal(GPT_IMAGE_PROVIDER_SAFE_SIZE, '1024x1024')
+assert.equal(shouldFallbackToSynchronousImageEndpoint(new Sub2ApiError(400, 'async image tasks are not enabled', 'not_found_error')), true)
+assert.equal(shouldFallbackToSynchronousImageEndpoint(new Sub2ApiError(400, 'async image tasks are disabled', 'not_found_error')), true)
+assert.equal(shouldFallbackToSynchronousImageEndpoint(new Sub2ApiError(502, 'insufficient tokens', 'UPSTREAM_HTTP_502')), false)
 
 console.log('Provider response test passed')

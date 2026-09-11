@@ -179,9 +179,7 @@ export function transparentBackgroundUnsupported(error: unknown) {
 export function shouldFallbackToSynchronousImageEndpoint(error: unknown) {
   if (!(error instanceof Sub2ApiError)) return false
   if ([404, 405, 501].includes(error.status)) return true
-  const code = String(error.code ?? '').toLowerCase()
-  return /async.*(?:disabled|unsupported|not.?found)/.test(code)
-    || /async image (?:tasks? )?(?:are )?(?:disabled|unsupported)|async image storage disabled/i.test(error.message)
+  return /async.*(?:disabled|unsupported|not.?found|not.?enabled)/i.test(`${error.code ?? ''} ${error.message}`)
 }
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number) {

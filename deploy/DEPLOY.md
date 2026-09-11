@@ -25,7 +25,7 @@ Windows 上生成的 `.next/standalone` 含 Windows 原生依赖，不能上传�
 先在本地核对发布包输出的 SHA-256，再上传到服务器。以下文件名以当前版本为例，实际以发布包为准：
 
 ```bash
-sha256sum /tmp/cinlan-studio-0.2.7-linux-source-20260902.tar.gz
+sha256sum /tmp/cinlan-studio-0.2.8-linux-source-20260911.tar.gz
 ```
 
 创建系统用户和目录：
@@ -38,7 +38,7 @@ sudo install -d -o cinlan -g cinlan /opt/cinlan-studio /var/lib/cinlan-studio/as
 首次安装源码包：
 
 ```bash
-sudo -u cinlan tar -xzf /tmp/cinlan-studio-0.2.7-linux-source-20260902.tar.gz \
+sudo -u cinlan tar -xzf /tmp/cinlan-studio-0.2.8-linux-source-20260911.tar.gz \
   --strip-components=1 -C /opt/cinlan-studio
 cd /opt/cinlan-studio
 sudo -u cinlan npm ci
@@ -87,7 +87,7 @@ PGSSLMODE=disable
 
 不要把 `/etc/cinlan-studio.env` 复制回源码目录或发布包。
 
-`CREATIVE_ASSET_STORAGE_DIR` 必须允许 Web service 用户写入。`0.2.7` 会在该目录下自动创建 `.thumbnails`，其中只保存可重建的 WebP 预览缓存；原图仍保存在原有 `reference/`、`result/` 等目录中。
+`CREATIVE_ASSET_STORAGE_DIR` 必须允许 Web service 用户写入。`0.2.8` 会在该目录下自动创建 `.thumbnails`，其中只保存可重建的 WebP 预览缓存；原图仍保存在原有 `reference/`、`result/` 等目录中。
 
 ## 4. 数据库迁移
 
@@ -114,7 +114,7 @@ sudo -u cinlan bash -lc '
 '
 ```
 
-结果必须包含 `001_creative_core.sql` 和 `003_studio_credential_broker.sql`。缺少 `003_studio_credential_broker.sql` 时账号仍可登录，但模型目录和生成会明确返回 `CREATIVE_SCHEMA_OUTDATED`，必须完成迁移后再开放服务。
+结果必须包含 `001_creative_core.sql`、`003_studio_credential_broker.sql` 和 `004_creative_job_retry_tuning.sql`。缺少 `001` 或 `003` 时账号仍可登录，但模型目录和生成会明确返回 `CREATIVE_SCHEMA_OUTDATED`；缺少 `004` 时现有表不会采用新的 `max_attempts` 默认值，发布前必须补齐迁移。
 
 ## 5. 安装 systemd service
 
