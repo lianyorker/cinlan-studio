@@ -34,7 +34,7 @@ async function main() {
     const body = await response.json()
     assert.equal(body.code, 'UPSTREAM_HTTP_502')
     assert.equal(body.message, 'Sub2API 上游暂时不可用，请稍后重试')
-    assert.equal(body.upstream_status, 502)
+    assert.equal('upstream_status' in body, false)
 
     let timeoutError: unknown
     try {

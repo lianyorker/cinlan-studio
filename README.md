@@ -1,6 +1,6 @@
 # Cinlan Studio
 
-Cinlan Studio is Cinlan's AI creation workspace for image generation, image editing, structured text generation, and durable creative history. Version `0.2.8` uses a same-origin Next.js BFF, PostgreSQL Creative Core, and an independent worker so long-running jobs can survive refreshes and process restarts.
+Cinlan Studio is Cinlan's AI creation workspace for image generation, image editing, structured text generation, and durable creative history. Version `0.2.9` uses a same-origin Next.js BFF, PostgreSQL Creative Core, and an independent worker so long-running jobs can survive refreshes and process restarts.
 
 **English** | [简体中文](./README.zh.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Deployment](./deploy/DEPLOY.md)
 
